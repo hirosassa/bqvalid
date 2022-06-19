@@ -111,8 +111,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-sql-bigquery"
-version = "0.0.1"
-source = "git+https://github.com/takegue/tree-sitter-sql-bigquery?branch=main#a6d6f097e3c538c528eabd9e8ee77e46fe84d5ba"
+version = "0.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f20842726d4dcbc3650474c99631ae27125fa8532d19fa51d016a223022413af"
 dependencies = [
  "cc",
  "tree-sitter",

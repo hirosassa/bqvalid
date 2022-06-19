@@ -7,6 +7,6 @@ edition = "2021"
 
 [dependencies]
 tree-sitter = "0.19.3"
-tree-sitter-sql-bigquery = { git = "https://github.com/takegue/tree-sitter-sql-bigquery", branch = "main"}
+tree-sitter-sql-bigquery = "0.0.6"
 tree-sitter-traversal = "0.1.2"
 thiserror = "1.0.31"
