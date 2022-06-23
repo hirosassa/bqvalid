@@ -1,6 +1,6 @@
+use std::fmt::Display;
 use std::process::ExitCode;
-use std::{io, io::Read, result::Result};
-use thiserror::Error;
+use std::{io, io::Read};
 use tree_sitter::{Node, Parser};
 use tree_sitter_sql_bigquery::language;
 use tree_sitter_traversal::{traverse, Order};
@@ -15,31 +15,40 @@ fn main() -> ExitCode {
 
     for node in traverse(tree.walk(), Order::Pre) {
         if node.kind() == "where_clause" {
-            if let Err(Error::ComparedWithSubquery(err)) =
-                compared_with_subquery_in_binary_expression(node, &sql)
-            {
-                eprintln!("{}", Error::ComparedWithSubquery(err));
+            if let Some(diagnostic) = compared_with_subquery_in_binary_expression(node, &sql) {
+                eprintln!("{}", diagnostic);
                 return ExitCode::FAILURE;
             }
-            if let Err(Error::ComparedWithSubquery(err)) =
-                compared_with_subquery_in_between_expression(node, &sql)
-            {
-                eprintln!("{}", Error::ComparedWithSubquery(err));
+            if let Some(diagnostic) = compared_with_subquery_in_between_expression(node, &sql) {
+                eprintln!("{}", diagnostic);
                 return ExitCode::FAILURE;
             }
         }
     }
-    print!("{}", sql);
     ExitCode::SUCCESS
 }
 
-#[derive(Error, Debug)]
-pub enum Error {
-    #[error("Full scan will cause! Compared _TABLE_SUFFIX with subquery{0}")]
-    ComparedWithSubquery(String),
+struct Diagnostic {
+    row: usize,
+    col: usize,
+    message: String,
 }
 
-fn compared_with_subquery_in_binary_expression(n: Node, src: &str) -> Result<(), Error> {
+impl Display for Diagnostic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}: {}", self.row, self.col, self.message)
+    }
+}
+
+fn new_full_scan_warning(row: usize, col: usize) -> Diagnostic {
+    Diagnostic {
+        row,
+        col,
+        message: "Full scan will cause! Should not compare _TABLE_SUFFIX with subquery".to_string(),
+    }
+}
+
+fn compared_with_subquery_in_binary_expression(n: Node, src: &str) -> Option<Diagnostic> {
     for node in traverse(n.walk(), Order::Pre) {
         let range = node.range();
         let text = &src[range.start_byte..range.end_byte];
@@ -52,20 +61,17 @@ fn compared_with_subquery_in_binary_expression(n: Node, src: &str) -> Result<(),
                 && right_operand.kind() == "select_subexpression"
             {
                 let rg = right_operand.range();
-                let error_part = &src[rg.start_byte..rg.end_byte];
-                return Err(Error::ComparedWithSubquery(format!(
-                    "\nstart at: line {start}\nend at: line {end}\nexpression:\n{part}",
-                    start = rg.start_point.row,
-                    end = rg.end_point.row,
-                    part = error_part,
-                )));
+                return Some(new_full_scan_warning(
+                    rg.start_point.row,
+                    rg.start_point.column,
+                ));
             }
         }
     }
-    Ok(())
+    None
 }
 
-fn compared_with_subquery_in_between_expression(n: Node, src: &str) -> Result<(), Error> {
+fn compared_with_subquery_in_between_expression(n: Node, src: &str) -> Option<Diagnostic> {
     for node in traverse(n.walk(), Order::Pre) {
         let range = node.range();
         let text = &src[range.start_byte..range.end_byte];
@@ -79,19 +85,16 @@ fn compared_with_subquery_in_between_expression(n: Node, src: &str) -> Result<()
                         && c.child(0).unwrap().kind() == "select_subexpression"
                     {
                         let rg = c.child(0).unwrap().range();
-                        let error_part = &src[rg.start_byte..rg.end_byte];
-                        return Err(Error::ComparedWithSubquery(format!(
-                            "\nstart at: line {start}\nend at: line {end}\nexpression:\n{part}",
-                            start = rg.start_point.row,
-                            end = rg.end_point.row,
-                            part = error_part,
-                        )));
+                        return Some(new_full_scan_warning(
+                            rg.start_point.row,
+                            rg.start_point.column,
+                        ));
                     }
                 }
             }
         }
     }
-    Ok(())
+    None
 }
 
 #[cfg(test)]
@@ -110,11 +113,11 @@ mod tests {
         for node in traverse(tree.walk(), Order::Pre) {
             if node.kind() == "where_clause" {
                 assert_eq!(
-                    compared_with_subquery_in_binary_expression(node, &sql).is_err(),
+                    compared_with_subquery_in_binary_expression(node, &sql).is_some(),
                     false
                 );
                 assert_eq!(
-                    compared_with_subquery_in_between_expression(node, &sql).is_err(),
+                    compared_with_subquery_in_between_expression(node, &sql).is_some(),
                     false
                 );
             }
@@ -131,7 +134,7 @@ mod tests {
 
         for node in traverse(tree.walk(), Order::Pre) {
             if node.kind() == "where_clause" {
-                assert!(compared_with_subquery_in_binary_expression(node, &sql).is_err());
+                assert!(compared_with_subquery_in_binary_expression(node, &sql).is_some());
             }
         }
     }
@@ -146,7 +149,7 @@ mod tests {
 
         for node in traverse(tree.walk(), Order::Pre) {
             if node.kind() == "where_clause" {
-                assert!(compared_with_subquery_in_between_expression(node, &sql).is_err());
+                assert!(compared_with_subquery_in_between_expression(node, &sql).is_some());
             }
         }
     }
@@ -161,7 +164,7 @@ mod tests {
 
         for node in traverse(tree.walk(), Order::Pre) {
             if node.kind() == "where_clause" {
-                assert!(compared_with_subquery_in_between_expression(node, &sql).is_err());
+                assert!(compared_with_subquery_in_between_expression(node, &sql).is_some());
             }
         }
     }
