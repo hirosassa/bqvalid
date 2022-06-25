@@ -10,7 +10,13 @@ use tree_sitter_sql_bigquery::language;
 use tree_sitter_traversal::{traverse, Order};
 
 #[derive(Debug, Parser)]
-#[clap(name = "struct", author, about, version)]
+#[clap(
+    name = env!("CARGO_PKG_NAME"),
+    author=env!("CARGO_PKG_AUTHORS"),
+    about=env!("CARGO_PKG_DESCRIPTION"),
+    version=env!("CARGO_PKG_VERSION"),
+    arg_required_else_help = true,
+)]
 struct Args {
     files: Vec<String>,
 }

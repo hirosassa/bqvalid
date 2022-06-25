@@ -11,13 +11,19 @@
 cat sample.sql | bqvalid
 ```
 
-If the SQL is invalid, `bqvalid` outputs the reason and its position like:
+If the SQL is contained the expressions that comparing ``_TABLE_SUFFIX` with subquery, `bqvalid` outputs the reason and its position like:
 ```
-Full scan will cause! Compared _TABLE_SUFFIX with subquery
-start at: line 5
-end at: line 7
-expression:
-(
-  select dt from dates
-)
+5:7: Full scan will cause! Should not compare _TABLE_SUFFIX with subquery
+```
+
+Also, you can input file paths, too:
+
+```
+bqvalid one.sql two.sql three.sql
+```
+
+Then, the output will as follows:
+```
+one.sql: 6:6: Full scan will cause! Should not compare _TABLE_SUFFIX with subquery
+three.sql: 5:19: Full scan will cause! Should not compare _TABLE_SUFFIX with subquery
 ```
