@@ -24,6 +24,6 @@ bqvalid one.sql two.sql three.sql
 
 Then, the output will as follows:
 ```
-one.sql: 6:6: Full scan will cause! Should not compare _TABLE_SUFFIX with subquery
-three.sql: 5:19: Full scan will cause! Should not compare _TABLE_SUFFIX with subquery
+one.sql:6:6: Full scan will cause! Should not compare _TABLE_SUFFIX with subquery
+three.sql:5:19: Full scan will cause! Should not compare _TABLE_SUFFIX with subquery
 ```
