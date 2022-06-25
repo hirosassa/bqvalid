@@ -1,30 +1,57 @@
+use clap::Parser;
+use std::collections::HashMap;
 use std::fmt::Display;
+use std::fs;
+use std::io::{self, Read};
 use std::process::ExitCode;
-use std::{io, io::Read};
-use tree_sitter::{Node, Parser};
+use tree_sitter::Node;
+use tree_sitter::Parser as TsParser;
 use tree_sitter_sql_bigquery::language;
 use tree_sitter_traversal::{traverse, Order};
 
+#[derive(Debug, Parser)]
+#[clap(name = "struct", author, about, version)]
+struct Args {
+    files: Vec<String>,
+}
+
 fn main() -> ExitCode {
-    let mut parser = Parser::new();
-    parser.set_language(language()).unwrap();
+    let stdin = io::stdin();
+    let args = Args::parse();
 
-    let mut sql = String::new();
-    let _ = io::stdin().read_to_string(&mut sql);
-    let tree = parser.parse(&sql, None).unwrap();
+    // stdin
+    if args.files.is_empty() {
+        if let Some(diagnostic) = analyse_sql(&mut stdin.lock()) {
+            eprintln!("{}", diagnostic);
+            return ExitCode::FAILURE;
+        }
+        return ExitCode::SUCCESS;
+    }
 
-    for node in traverse(tree.walk(), Order::Pre) {
-        if node.kind() == "where_clause" {
-            if let Some(diagnostic) = compared_with_subquery_in_binary_expression(node, &sql) {
-                eprintln!("{}", diagnostic);
-                return ExitCode::FAILURE;
-            }
-            if let Some(diagnostic) = compared_with_subquery_in_between_expression(node, &sql) {
-                eprintln!("{}", diagnostic);
-                return ExitCode::FAILURE;
+    // files
+    let errors: HashMap<String, Option<Diagnostic>> = args
+        .files
+        .into_iter()
+        .map(|f: String| -> (String, Option<Diagnostic>) {
+            let key = &f;
+            (
+                key.to_string(),
+                fs::File::open(&f)
+                    .map(|ref mut file| analyse_sql(file))
+                    .expect("failed to open file"),
+            )
+        })
+        .filter(|(_k, v)| v.is_some())
+        .collect();
+    if !errors.is_empty() {
+        for (k, v) in errors.iter() {
+            if let Some(v) = v {
+                eprintln!("{}: {}", k, v);
             }
         }
+        return ExitCode::FAILURE;
     }
+
     ExitCode::SUCCESS
 }
 
@@ -46,6 +73,27 @@ fn new_full_scan_warning(row: usize, col: usize) -> Diagnostic {
         col,
         message: "Full scan will cause! Should not compare _TABLE_SUFFIX with subquery".to_string(),
     }
+}
+
+fn analyse_sql<F: Read>(f: &mut F) -> Option<Diagnostic> {
+    let mut sql = String::new();
+    let _ = f.read_to_string(&mut sql);
+
+    let mut parser = TsParser::new();
+    parser.set_language(language()).unwrap();
+    let tree = parser.parse(&sql, None).unwrap();
+
+    for node in traverse(tree.walk(), Order::Pre) {
+        if node.kind() == "where_clause" {
+            if let Some(diagnostic) = compared_with_subquery_in_binary_expression(node, &sql) {
+                return Some(diagnostic);
+            }
+            if let Some(diagnostic) = compared_with_subquery_in_between_expression(node, &sql) {
+                return Some(diagnostic);
+            }
+        }
+    }
+    None
 }
 
 fn compared_with_subquery_in_binary_expression(n: Node, src: &str) -> Option<Diagnostic> {
@@ -104,7 +152,7 @@ mod tests {
 
     #[test]
     fn valid() {
-        let mut parser = Parser::new();
+        let mut parser = TsParser::new();
         parser.set_language(language()).unwrap();
 
         let sql = fs::read_to_string("./sql/valid.sql").unwrap();
@@ -126,7 +174,7 @@ mod tests {
 
     #[test]
     fn binary_op() {
-        let mut parser = Parser::new();
+        let mut parser = TsParser::new();
         parser.set_language(language()).unwrap();
 
         let sql = fs::read_to_string("./sql/subquery_with_binary_op.sql").unwrap();
@@ -141,7 +189,7 @@ mod tests {
 
     #[test]
     fn between_from() {
-        let mut parser = Parser::new();
+        let mut parser = TsParser::new();
         parser.set_language(language()).unwrap();
 
         let sql = fs::read_to_string("./sql/subquery_with_between_from.sql").unwrap();
@@ -156,7 +204,7 @@ mod tests {
 
     #[test]
     fn between_to() {
-        let mut parser = Parser::new();
+        let mut parser = TsParser::new();
         parser.set_language(language()).unwrap();
 
         let sql = fs::read_to_string("./sql/subquery_with_between_to.sql").unwrap();
