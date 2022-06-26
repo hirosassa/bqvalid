@@ -8,6 +8,7 @@ use tree_sitter::Node;
 use tree_sitter::Parser as TsParser;
 use tree_sitter_sql_bigquery::language;
 use tree_sitter_traversal::{traverse, Order};
+use walkdir::WalkDir;
 
 #[derive(Debug, Parser)]
 #[clap(
@@ -38,21 +39,32 @@ fn main() -> ExitCode {
     let errors: HashMap<String, Option<Diagnostic>> = args
         .files
         .into_iter()
-        .map(|f: String| -> (String, Option<Diagnostic>) {
-            let key = &f;
-            (
-                key.to_string(),
-                fs::File::open(&f)
-                    .map(|ref mut file| analyse_sql(file))
-                    .expect("failed to open file"),
-            )
+        .flat_map(|f| {
+            WalkDir::new(f)
+                .into_iter()
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    e.file_name()
+                        .to_str()
+                        .map(|e| e.ends_with(".sql"))
+                        .unwrap_or(false)
+                })
+                .map(|f| -> (String, Option<Diagnostic>) {
+                    let key = f.into_path();
+                    (
+                        key.to_str().unwrap_or("").to_string(),
+                        fs::File::open(key)
+                            .map(|ref mut file| analyse_sql(file))
+                            .expect("failed to open file"),
+                    )
+                })
         })
         .filter(|(_k, v)| v.is_some())
         .collect();
     if !errors.is_empty() {
         for (k, v) in errors.iter() {
             if let Some(v) = v {
-                eprintln!("{}: {}", k, v);
+                eprintln!("{}:{}", k, v);
             }
         }
         return ExitCode::FAILURE;
