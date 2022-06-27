@@ -20,10 +20,15 @@ If the SQL is contained the expressions that comparing ``_TABLE_SUFFIX` with sub
 5:7: Full scan will cause! Should not compare _TABLE_SUFFIX with subquery
 ```
 
-Also, you can input file paths, too:
+Also, you can input file paths or directory. `bqvalid` collects files whose extension is `.sql` (ignores files that has other extensions) :
 
-```
+```shell
 bqvalid one.sql two.sql three.sql
+```
+
+or
+```shell
+bqvalid sql/
 ```
 
 Then, the output will as follows:

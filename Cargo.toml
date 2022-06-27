@@ -13,3 +13,6 @@ tree-sitter-sql-bigquery = "0.0.6"
 tree-sitter-traversal = "0.1.2"
 clap = { version = "3.2.6", features = ["derive"] }
 walkdir = "2.3.2"
+
+[dev-dependencies]
+tempfile = "3"
