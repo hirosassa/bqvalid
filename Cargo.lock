@@ -36,7 +36,7 @@ checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
 
 [[package]]
 name = "bqvalid"
-version = "0.0.3"
+version = "0.0.6"
 dependencies = [
  "clap",
  "tempfile",
@@ -314,9 +314,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-sql-bigquery"
-version = "0.0.6"
+version = "0.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f20842726d4dcbc3650474c99631ae27125fa8532d19fa51d016a223022413af"
+checksum = "f9d7688411a641e19b7c1adc8434b82d3532310c71d032db310454a1982e94ba"
 dependencies = [
  "cc",
  "tree-sitter",
