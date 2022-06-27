@@ -8,14 +8,14 @@ use tree_sitter::Node;
 use tree_sitter::Parser as TsParser;
 use tree_sitter_sql_bigquery::language;
 use tree_sitter_traversal::{traverse, Order};
-use walkdir::WalkDir;
+use walkdir::{DirEntry, WalkDir};
 
 #[derive(Debug, Parser)]
 #[clap(
     name = env!("CARGO_PKG_NAME"),
-    author=env!("CARGO_PKG_AUTHORS"),
-    about=env!("CARGO_PKG_DESCRIPTION"),
-    version=env!("CARGO_PKG_VERSION"),
+    author = env!("CARGO_PKG_AUTHORS"),
+    about = env!("CARGO_PKG_DESCRIPTION"),
+    version = env!("CARGO_PKG_VERSION"),
     arg_required_else_help = true,
 )]
 struct Args {
@@ -36,41 +36,42 @@ fn main() -> ExitCode {
     }
 
     // files
-    let errors: HashMap<String, Option<Diagnostic>> = args
-        .files
-        .into_iter()
-        .flat_map(|f| {
-            WalkDir::new(f)
-                .into_iter()
-                .filter_map(|e| e.ok())
-                .filter(|e| {
-                    e.file_name()
-                        .to_str()
-                        .map(|e| e.ends_with(".sql"))
-                        .unwrap_or(false)
-                })
-                .map(|f| -> (String, Option<Diagnostic>) {
-                    let key = f.into_path();
-                    (
-                        key.to_str().unwrap_or("").to_string(),
-                        fs::File::open(key)
-                            .map(|ref mut file| analyse_sql(file))
-                            .expect("failed to open file"),
-                    )
-                })
+    let targets = args.files.into_iter().flat_map(|f| {
+        WalkDir::new(f)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(is_sql)
+    });
+    let errors = targets
+        .map(|f| -> (String, Option<Diagnostic>) {
+            let key = f.into_path();
+            (
+                key.to_str().unwrap_or("").to_string(),
+                fs::File::open(key)
+                    .map(|ref mut file| analyse_sql(file))
+                    .expect("failed to open file"),
+            )
         })
         .filter(|(_k, v)| v.is_some())
-        .collect();
+        .collect::<HashMap<String, Option<Diagnostic>>>();
+
     if !errors.is_empty() {
-        for (k, v) in errors.iter() {
-            if let Some(v) = v {
-                eprintln!("{}:{}", k, v);
+        for (fname, diag) in errors.iter() {
+            if let Some(diag) = diag {
+                eprintln!("{}:{}", fname, diag);
             }
         }
         return ExitCode::FAILURE;
     }
-
     ExitCode::SUCCESS
+}
+
+fn is_sql(entry: &DirEntry) -> bool {
+    entry
+        .file_name()
+        .to_str()
+        .map(|s| s.ends_with(".sql"))
+        .unwrap_or(false)
 }
 
 /// Represents a diagnostic, such as a full scan error.
@@ -169,7 +170,8 @@ fn compared_with_subquery_in_between_expression(n: Node, src: &str) -> Option<Di
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
+    use std::fs::{self, File};
+    use tempfile::tempdir;
 
     #[test]
     fn valid() {
@@ -235,6 +237,30 @@ mod tests {
             if node.kind() == "where_clause" {
                 assert!(compared_with_subquery_in_between_expression(node, &sql).is_some());
             }
+        }
+    }
+
+    #[test]
+    fn test_is_sql_true() {
+        let filename = "sample.sql";
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join(filename);
+        let _ = File::create(&file_path).unwrap();
+
+        for e in WalkDir::new(file_path).into_iter().filter_map(|e| e.ok()) {
+            assert!(is_sql(&e));
+        }
+    }
+
+    #[test]
+    fn test_is_sql_false() {
+        let filename = "sample.txt";
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join(filename);
+        let _ = File::create(&file_path).unwrap();
+
+        for e in WalkDir::new(file_path).into_iter().filter_map(|e| e.ok()) {
+            assert!(!is_sql(&e));
         }
     }
 }
