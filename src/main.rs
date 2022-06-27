@@ -73,6 +73,9 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// Represents a diagnostic, such as a full scan error.
+///
+/// rows and columns are 1-based.
 struct Diagnostic {
     row: usize,
     col: usize,
@@ -87,8 +90,8 @@ impl Display for Diagnostic {
 
 fn new_full_scan_warning(row: usize, col: usize) -> Diagnostic {
     Diagnostic {
-        row,
-        col,
+        row: row + 1,
+        col: col + 1,
         message: "Full scan will cause! Should not compare _TABLE_SUFFIX with subquery".to_string(),
     }
 }
