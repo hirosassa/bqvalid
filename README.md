@@ -15,7 +15,7 @@
 cat sample.sql | bqvalid
 ```
 
-If the SQL is contained the expressions that comparing ``_TABLE_SUFFIX` with subquery, `bqvalid` outputs the reason and its position like:
+If the SQL is contained the expressions that comparing `_TABLE_SUFFIX` with subquery, `bqvalid` outputs the reason and its position like:
 ```
 5:7: Full scan will cause! Should not compare _TABLE_SUFFIX with subquery
 ```
