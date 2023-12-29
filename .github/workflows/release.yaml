@@ -33,20 +33,16 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
-      - name: Install stable toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+      - name: Install toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          cargo install cross
 
       - name: Cross build with all features
-        uses: actions-rs/cargo@v1
-        with:
-          use-cross: true
-          command: build
-          args: --release --target ${{ matrix.target }} --all-features --verbose
+        run: cross build --release --target ${{ matrix.target }} --all-features --verbose
 
       - name: Upload binaries to release
         uses: svenstaro/upload-release-action@2.1.1
