@@ -24,7 +24,7 @@ jobs:
       - name: Install ${{ matrix.rust }}
         run: |
           rustup toolchain install ${{ matrix.rust }} --profile minimal --component rustfmt,clippy
-          rustup default ${{ matrix.rust }
+          rustup default ${{ matrix.rust }}
 
       - name: Run cargo check
         run: cargo check
