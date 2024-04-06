@@ -89,6 +89,14 @@ impl Display for Diagnostic {
     }
 }
 
+fn new_current_date_warning(row: usize, col: usize) -> Diagnostic {
+    Diagnostic {
+        row: row + 1,
+        col: col + 1,
+        message: "CURRENT_DATE is used!".to_string(),
+    }
+}
+
 fn new_full_scan_warning(row: usize, col: usize) -> Diagnostic {
     Diagnostic {
         row: row + 1,
@@ -106,6 +114,10 @@ fn analyse_sql<F: Read>(f: &mut F) -> Option<Diagnostic> {
     let tree = parser.parse(&sql, None).unwrap();
 
     for node in traverse(tree.walk(), Order::Pre) {
+        if let Some(diagnostic) = current_date_used(node, &sql) {
+            return Some(diagnostic);
+        }
+
         if node.kind() == "where_clause" {
             if let Some(diagnostic) = compared_with_subquery_in_binary_expression(node, &sql) {
                 return Some(diagnostic);
@@ -114,6 +126,19 @@ fn analyse_sql<F: Read>(f: &mut F) -> Option<Diagnostic> {
                 return Some(diagnostic);
             }
         }
+    }
+    None
+}
+
+fn current_date_used(node: Node, src: &str) -> Option<Diagnostic> {
+    let range = node.range();
+    let text = &src[range.start_byte..range.end_byte];
+
+    if node.kind() == "identifier" && text.to_ascii_lowercase() == "current_date" {
+        return Some(new_current_date_warning(
+            range.start_point.row,
+            range.start_point.column,
+        ));
     }
     None
 }
@@ -238,6 +263,40 @@ mod tests {
                 assert!(compared_with_subquery_in_between_expression(node, &sql).is_some());
             }
         }
+    }
+
+    #[test]
+    fn current_date_is_used() {
+        let mut parser = TsParser::new();
+        parser.set_language(language()).unwrap();
+
+        let sql = fs::read_to_string("./sql/current_date_is_used.sql").unwrap();
+        let tree = parser.parse(&sql, None).unwrap();
+
+        let mut ds = Vec::new();
+        for node in traverse(tree.walk(), Order::Pre) {
+            if let Some(diag) = current_date_used(node, &sql) {
+                ds.push(diag);
+            }
+        }
+        assert!(ds.len() > 0);
+    }
+
+    #[test]
+    fn current_date_is_not_used() {
+        let mut parser = TsParser::new();
+        parser.set_language(language()).unwrap();
+
+        let sql = fs::read_to_string("./sql/sample.sql").unwrap();
+        let tree = parser.parse(&sql, None).unwrap();
+
+        let mut ds = Vec::new();
+        for node in traverse(tree.walk(), Order::Pre) {
+            if let Some(diag) = current_date_used(node, &sql) {
+                ds.push(diag);
+            }
+        }
+        assert!(ds.is_empty());
     }
 
     #[test]
