@@ -2,8 +2,10 @@ name: Release
 
 on:
   push:
-    tags:
-      - '*'
+    branches: [ main ]
+  # push:
+  #   tags:
+  #     - '*'
 
 jobs:
   build:
@@ -40,6 +42,7 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
           cargo install cross
+          rustup target add {{ matrix.target }}
 
       - name: Cross build with all features
         run: cross build --release --target ${{ matrix.target }} --all-features --verbose
