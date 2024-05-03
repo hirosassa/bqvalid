@@ -1,11 +1,9 @@
 name: Release
 
 on:
-  pull_request:
-    branches: [ main ]
-  # push:
-  #   tags:
-  #     - '*'
+  push:
+    tags:
+      - '*'
 
 jobs:
   build:
@@ -47,11 +45,11 @@ jobs:
       - name: Cross build with all features
         run: cross build --release --target ${{ matrix.target }} --all-features --verbose
 
-      # - name: Upload binaries to release
-      #   uses: svenstaro/upload-release-action@2.7.0
-      #   with:
-      #     repo_token: ${{ secrets.GITHUB_TOKEN }}
-      #     file: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
-      #     asset_name: ${{ matrix.asset_name }}
-      #     tag: ${{ github.ref }}
-      #     overwrite: true
+      - name: Upload binaries to release
+        uses: svenstaro/upload-release-action@2.7.0
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+          asset_name: ${{ matrix.asset_name }}
+          tag: ${{ github.ref }}
+          overwrite: true
