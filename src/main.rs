@@ -1,5 +1,4 @@
 use clap::Parser;
-use std::collections::HashMap;
 use std::fmt::Display;
 use std::fs;
 use std::io::{self, Read};
@@ -28,8 +27,10 @@ fn main() -> ExitCode {
 
     // stdin
     if args.files.is_empty() {
-        if let Some(diagnostic) = analyse_sql(&mut stdin.lock()) {
-            eprintln!("{}", diagnostic);
+        if let Some(diagnostics) = analyse_sql(&mut stdin.lock()) {
+            for diagnostic in diagnostics {
+                eprintln!("{}", diagnostic);
+            }
             return ExitCode::FAILURE;
         }
         return ExitCode::SUCCESS;
@@ -42,27 +43,25 @@ fn main() -> ExitCode {
             .filter_map(|e| e.ok())
             .filter(is_sql)
     });
-    let errors = targets
-        .map(|f| -> (String, Option<Diagnostic>) {
-            let key = f.into_path();
-            (
-                key.to_str().unwrap_or("").to_string(),
-                fs::File::open(key)
-                    .map(|ref mut file| analyse_sql(file))
-                    .expect("failed to open file"),
-            )
-        })
-        .filter(|(_k, v)| v.is_some())
-        .collect::<HashMap<String, Option<Diagnostic>>>();
 
-    if !errors.is_empty() {
-        for (fname, diag) in errors.iter() {
-            if let Some(diag) = diag {
-                eprintln!("{}:{}", fname, diag);
+    let mut all_diagnostics = Vec::new();
+
+    for target in targets {
+        let file_path = target.into_path();
+        if let Ok(mut file) = fs::File::open(&file_path) {
+            if let Some(diagnostics) = analyse_sql(&mut file) {
+                for diagnostic in diagnostics {
+                    eprintln!("{}: {}", file_path.display(), diagnostic);
+                    all_diagnostics.push(diagnostic);
+                }
             }
         }
+    }
+
+    if !all_diagnostics.is_empty() {
         return ExitCode::FAILURE;
     }
+
     ExitCode::SUCCESS
 }
 
@@ -105,7 +104,7 @@ fn new_full_scan_warning(row: usize, col: usize) -> Diagnostic {
     }
 }
 
-fn analyse_sql<F: Read>(f: &mut F) -> Option<Diagnostic> {
+fn analyse_sql<F: Read>(f: &mut F) -> Option<Vec<Diagnostic>> {
     let mut sql = String::new();
     let _ = f.read_to_string(&mut sql);
 
@@ -113,21 +112,28 @@ fn analyse_sql<F: Read>(f: &mut F) -> Option<Diagnostic> {
     parser.set_language(language()).unwrap();
     let tree = parser.parse(&sql, None).unwrap();
 
+    let mut diagnostics = Vec::new();
+
     for node in traverse(tree.walk(), Order::Pre) {
         if let Some(diagnostic) = current_date_used(node, &sql) {
-            return Some(diagnostic);
+            diagnostics.push(diagnostic);
         }
 
         if node.kind() == "where_clause" {
             if let Some(diagnostic) = compared_with_subquery_in_binary_expression(node, &sql) {
-                return Some(diagnostic);
+                diagnostics.push(diagnostic);
             }
             if let Some(diagnostic) = compared_with_subquery_in_between_expression(node, &sql) {
-                return Some(diagnostic);
+                diagnostics.push(diagnostic);
             }
         }
     }
-    None
+
+    if diagnostics.is_empty() {
+        None
+    } else {
+        Some(diagnostics)
+    }
 }
 
 fn current_date_used(node: Node, src: &str) -> Option<Diagnostic> {
@@ -321,5 +327,31 @@ mod tests {
         for e in WalkDir::new(file_path).into_iter().filter_map(|e| e.ok()) {
             assert!(!is_sql(&e));
         }
+    }
+
+    #[test]
+    fn multiple_messages_in_single_sql_file() {
+        let mut parser = TsParser::new();
+        parser.set_language(language()).unwrap();
+
+        let sql = fs::read_to_string("./sql/current_date_and_subquery_with_between_are_used.sql")
+            .unwrap();
+        let tree = parser.parse(&sql, None).unwrap();
+
+        let mut diagnostics = Vec::new();
+        for node in traverse(tree.walk(), Order::Pre) {
+            if let Some(diagnostic) = current_date_used(node, &sql) {
+                diagnostics.push(diagnostic);
+            }
+            if node.kind() == "where_clause" {
+                if let Some(diagnostic) = compared_with_subquery_in_binary_expression(node, &sql) {
+                    diagnostics.push(diagnostic);
+                }
+                if let Some(diagnostic) = compared_with_subquery_in_between_expression(node, &sql) {
+                    diagnostics.push(diagnostic);
+                }
+            }
+        }
+        assert!(diagnostics.len() > 1);
     }
 }
