@@ -109,7 +109,7 @@ fn analyse_sql<F: Read>(f: &mut F) -> Option<Vec<Diagnostic>> {
     let _ = f.read_to_string(&mut sql);
 
     let mut parser = TsParser::new();
-    parser.set_language(language()).unwrap();
+    parser.set_language(&language()).unwrap();
     let tree = parser.parse(&sql, None).unwrap();
 
     let mut diagnostics = Vec::new();
@@ -207,7 +207,7 @@ mod tests {
     #[test]
     fn valid() {
         let mut parser = TsParser::new();
-        parser.set_language(language()).unwrap();
+        parser.set_language(&language()).unwrap();
 
         let sql = fs::read_to_string("./sql/valid.sql").unwrap();
         let tree = parser.parse(&sql, None).unwrap();
@@ -229,7 +229,7 @@ mod tests {
     #[test]
     fn binary_op() {
         let mut parser = TsParser::new();
-        parser.set_language(language()).unwrap();
+        parser.set_language(&language()).unwrap();
 
         let sql = fs::read_to_string("./sql/subquery_with_binary_op.sql").unwrap();
         let tree = parser.parse(&sql, None).unwrap();
@@ -244,7 +244,7 @@ mod tests {
     #[test]
     fn between_from() {
         let mut parser = TsParser::new();
-        parser.set_language(language()).unwrap();
+        parser.set_language(&language()).unwrap();
 
         let sql = fs::read_to_string("./sql/subquery_with_between_from.sql").unwrap();
         let tree = parser.parse(&sql, None).unwrap();
@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn between_to() {
         let mut parser = TsParser::new();
-        parser.set_language(language()).unwrap();
+        parser.set_language(&language()).unwrap();
 
         let sql = fs::read_to_string("./sql/subquery_with_between_to.sql").unwrap();
         let tree = parser.parse(&sql, None).unwrap();
@@ -274,7 +274,7 @@ mod tests {
     #[test]
     fn current_date_is_used() {
         let mut parser = TsParser::new();
-        parser.set_language(language()).unwrap();
+        parser.set_language(&language()).unwrap();
 
         let sql = fs::read_to_string("./sql/current_date_is_used.sql").unwrap();
         let tree = parser.parse(&sql, None).unwrap();
@@ -291,7 +291,7 @@ mod tests {
     #[test]
     fn current_date_is_not_used() {
         let mut parser = TsParser::new();
-        parser.set_language(language()).unwrap();
+        parser.set_language(&language()).unwrap();
 
         let sql = fs::read_to_string("./sql/sample.sql").unwrap();
         let tree = parser.parse(&sql, None).unwrap();
@@ -332,7 +332,7 @@ mod tests {
     #[test]
     fn multiple_messages_in_single_sql_file() {
         let mut parser = TsParser::new();
-        parser.set_language(language()).unwrap();
+        parser.set_language(&language()).unwrap();
 
         let sql = fs::read_to_string("./sql/current_date_and_subquery_with_between_are_used.sql")
             .unwrap();
