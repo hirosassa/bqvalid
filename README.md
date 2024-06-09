@@ -6,8 +6,16 @@
 
 ## What bqvalid does
 
-`bqvalid` is the SQL validator tool for BigQuery standard SQL.
-`bqvalid` fails with error message if there's the expression that will cause full scan, print as it is otherwise.
+`bqvalid` is a SQL linter tool for BigQuery GoogleSQL (formerly known as StandardSQL).
+`bqvalid` fails with error message if there are the violation of rules described in the [rules page](https://github.com/hirosassa/bqvalid/blob/main/docs/rules.md).
+
+## Installation
+
+You can get binary of `bqvalid` from the release page like
+
+```shell
+curl -LsJO https://github.com/hirosassa/bqvalid/releases/download/v0.0.9/bqvalid-x86_64-apple-darwin
+```
 
 ## Usage
 
@@ -36,3 +44,12 @@ Then, the output will as follows:
 one.sql:6:6: Full scan will cause! Should not compare _TABLE_SUFFIX with subquery
 three.sql:5:19: Full scan will cause! Should not compare _TABLE_SUFFIX with subquery
 ```
+
+## Linting Rules
+
+See the [rules page](https://github.com/hirosassa/bqvalid/blob/main/docs/rules.md)
+
+
+## Contributing
+
+See the [contributing guide](https://github.com/hirosassa/bqvalid/blob/main/docs/contribute.md)!

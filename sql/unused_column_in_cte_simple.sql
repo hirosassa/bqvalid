@@ -23,7 +23,8 @@ with data1 as (
   on
     data1.column1 = data2.column3
 )
-select 
-  * 
+select
+  *
 from
   data3
+
