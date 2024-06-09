@@ -9,6 +9,13 @@
 `bqvalid` is a SQL linter tool for BigQuery GoogleSQL (formerly known as StandardSQL).
 `bqvalid` fails with error message if there are the violation of rules described in the [rules page](https://github.com/hirosassa/bqvalid/blob/main/docs/rules.md).
 
+## Installation
+
+You can get binary of `bqvalid` from the release page like
+
+```shell
+curl -LsJO https://github.com/hirosassa/bqvalid/releases/download/v0.0.9/bqvalid-x86_64-apple-darwin
+```
 
 ## Usage
 
