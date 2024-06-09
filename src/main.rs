@@ -1,7 +1,10 @@
 use bqvalid::diagnostic::Diagnostic;
 use bqvalid::rules::compare_table_suffix_with_subquery;
+use bqvalid::rules::unused_column_in_cte;
 use bqvalid::rules::use_current_date;
 use clap::Parser;
+use clap_verbosity_flag::Verbosity;
+use log::debug;
 use std::fs;
 use std::io::{self, Read};
 use std::process::ExitCode;
@@ -19,11 +22,18 @@ use walkdir::{DirEntry, WalkDir};
 )]
 struct Args {
     files: Vec<String>,
+
+    #[clap(flatten)]
+    verbose: Verbosity,
 }
 
 fn main() -> ExitCode {
     let stdin = io::stdin();
     let args = Args::parse();
+    env_logger::Builder::new()
+        .filter_level(args.verbose.log_level_filter())
+        .init();
+    debug!("verbose mode");
 
     // stdin
     if args.files.is_empty() {
@@ -84,6 +94,10 @@ fn analyse_sql<F: Read>(f: &mut F) -> Option<Vec<Diagnostic>> {
     let mut diagnostics = Vec::new();
 
     if let Some(diags) = compare_table_suffix_with_subquery::check(&tree, &sql) {
+        diagnostics.extend(diags);
+    }
+
+    if let Some(diags) = unused_column_in_cte::check(&tree, &sql) {
         diagnostics.extend(diags);
     }
 
