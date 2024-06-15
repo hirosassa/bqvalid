@@ -86,7 +86,7 @@ struct ColumnInfo {
 }
 
 impl ColumnInfo {
-    fn new(table_name: Option<String>, column_name: String, row: usize, col: usize) -> Self {
+    const fn new(table_name: Option<String>, column_name: String, row: usize, col: usize) -> Self {
         Self {
             table_name,
             column_name,
