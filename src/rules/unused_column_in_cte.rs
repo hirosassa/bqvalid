@@ -86,7 +86,7 @@ struct ColumnInfo {
 }
 
 impl ColumnInfo {
-    fn new(table_name: Option<String>, column_name: String, row: usize, col: usize) -> Self {
+    const fn new(table_name: Option<String>, column_name: String, row: usize, col: usize) -> Self {
         Self {
             table_name,
             column_name,
@@ -181,6 +181,7 @@ fn find_final_select<'a>(node: &'a Node<'a>) -> Option<Node<'a>> {
 
     None
 }
+
 fn extract_columns(
     node: &Node,
     sql: &str,
@@ -287,7 +288,7 @@ mod tests {
         let columns = unused_columns_in_cte(&root, &sql);
         assert_eq!(columns.len(), 2);
 
-        let actuals = vec!["unused_column1", "unused_column2"];
+        let actuals = ["unused_column1", "unused_column2"];
         for (expect, actual) in columns.iter().zip(actuals.iter()) {
             assert_eq!(expect.column_name, actual.to_string());
         }
@@ -305,6 +306,6 @@ mod tests {
         let root = tree.root_node();
 
         let columns = unused_columns_in_cte(&root, &sql);
-        assert_eq!(columns.len(), 0);
+        assert!(columns.is_empty());
     }
 }
