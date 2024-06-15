@@ -57,7 +57,7 @@ mod tests {
                 ds.push(diag);
             }
         }
-        assert!(ds.len() > 0);
+        assert!(!ds.is_empty());
     }
 
     #[test]

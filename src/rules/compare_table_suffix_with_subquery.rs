@@ -98,14 +98,8 @@ mod tests {
 
         for node in traverse(tree.walk(), Order::Pre) {
             if node.kind() == "where_clause" {
-                assert_eq!(
-                    compared_with_subquery_in_binary_expression(node, &sql).is_some(),
-                    false
-                );
-                assert_eq!(
-                    compared_with_subquery_in_between_expression(node, &sql).is_some(),
-                    false
-                );
+                assert!(compared_with_subquery_in_binary_expression(node, &sql).is_none());
+                assert!(compared_with_subquery_in_between_expression(node, &sql).is_none());
             }
         }
     }
