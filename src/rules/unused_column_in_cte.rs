@@ -42,18 +42,15 @@ fn find_unused_columns(
     final_select_columns: Vec<ColumnInfo>,
 ) -> Vec<ColumnInfo> {
     let mut used_columns = final_select_columns.clone();
-
-    let mut candidates = Vec::new();
-    candidates.extend(final_select_columns.iter());
+    let mut candidates = final_select_columns.clone();
 
     while let Some(cand) = candidates.pop() {
         if let Some(key) = &cand.table_name {
-            if cte_columns.contains_key(key) {
-                let columns = cte_columns.get(key).unwrap();
+            if let Some(columns) = cte_columns.get(key) {
                 for col in columns {
                     if col.column_name == cand.column_name {
                         used_columns.push(col.clone());
-                        candidates.push(col);
+                        candidates.push(col.clone());
                     }
                 }
             }
@@ -138,10 +135,12 @@ fn collect_cte_columns(node: &Node, sql: &str) -> HashMap<String, Vec<ColumnInfo
     for cte_node in find_ctes(node) {
         let cte_name = get_cte_name(&cte_node, sql);
         let columns = extract_columns(&cte_node, sql, &cte_columns);
+
         debug!("{}", cte_name);
         for column in &columns {
             debug!("{}", column);
         }
+
         cte_columns.insert(cte_name, columns);
     }
 
@@ -221,8 +220,8 @@ fn find_original_table(
     cte_columns: &HashMap<String, Vec<ColumnInfo>>,
 ) -> String {
     for table in tables {
-        if cte_columns.contains_key(table) {
-            for column_info in cte_columns.get(table).unwrap() {
+        if let Some(columns) = cte_columns.get(table) {
+            for column_info in columns {
                 if column.contains(&column_info.column_name) {
                     return table.clone();
                 }
@@ -241,11 +240,10 @@ fn expand_asterisk(
 ) -> Vec<ColumnInfo> {
     let mut expanded_columns = Vec::new();
     for cte_name in cte_names {
-        if cte_columns.contains_key(cte_name) {
-            let cols = cte_columns.get(cte_name).unwrap().clone();
+        if let Some(cols) = cte_columns.get(cte_name) {
             for col in cols {
                 let mut cloned_col = col.clone();
-                cloned_col.table_name = Some(cte_name.clone());
+                cloned_col.table_name = Some(cte_name.clone()); // update table name
                 cloned_col.row = position.row;
                 cloned_col.col = position.column;
                 expanded_columns.push(cloned_col);
@@ -288,9 +286,9 @@ mod tests {
         let columns = unused_columns_in_cte(&root, &sql);
         assert_eq!(columns.len(), 2);
 
-        let actuals = ["unused_column1", "unused_column2"];
-        for (expect, actual) in columns.iter().zip(actuals.iter()) {
-            assert_eq!(expect.column_name, actual.to_string());
+        let expecteds = ["unused_column1", "unused_column2"];
+        for (expected, actual) in expecteds.iter().zip(columns.iter()) {
+            assert_eq!(*expected.to_string(), actual.column_name);
         }
     }
 
@@ -307,5 +305,106 @@ mod tests {
 
         let columns = unused_columns_in_cte(&root, &sql);
         assert!(columns.is_empty());
+    }
+
+    #[test]
+    fn test_collect_cte_columns() {
+        let mut parser = TsParser::new();
+        parser.set_language(&language()).unwrap();
+
+        let sql = fs::read_to_string("./sql/unused_column_in_cte_simple.sql").unwrap();
+        let tree = parser.parse(&sql, None).unwrap();
+        let root = tree.root_node();
+
+        let cte_columns = collect_cte_columns(&root, &sql);
+        assert_eq!(cte_columns.len(), 3);
+
+        let cte_names = ["data1", "data2", "data3"];
+        let cte_column_names = [
+            vec!["column1", "column2", "unused_column1"],
+            vec!["column3", "unused_column2"],
+            vec!["column1", "column2", "column3"],
+        ];
+        for (cte_name, column_names) in cte_names.iter().zip(cte_column_names.iter()) {
+            assert!(cte_columns.contains_key(*cte_name));
+
+            let actual_columns = cte_columns.get(*cte_name).unwrap();
+            for (expect, actual) in column_names.iter().zip(actual_columns.iter()) {
+                assert_eq!(*expect.to_string(), actual.column_name);
+            }
+        }
+    }
+
+    #[test]
+    fn test_collect_final_select_columns() {
+        let mut parser = TsParser::new();
+        parser.set_language(&language()).unwrap();
+
+        let sql = fs::read_to_string("./sql/unused_column_in_cte_simple.sql").unwrap();
+        let tree = parser.parse(&sql, None).unwrap();
+        let root = tree.root_node();
+
+        let cte_columns = collect_cte_columns(&root, &sql);
+        let final_select_columns = collect_final_select_columns(&root, &sql, &cte_columns);
+        assert_eq!(final_select_columns.len(), 3);
+
+        let expected_table = "data3";
+        let expected_columns = ["column1", "column2", "column3"];
+        for (expected, actual) in expected_columns.iter().zip(final_select_columns.iter()) {
+            assert_eq!(expected_table, actual.table_name.clone().unwrap());
+            assert_eq!(*expected.to_string(), actual.column_name);
+        }
+    }
+
+    #[test]
+    fn test_find_unused_columns() {
+        let cte_columns = HashMap::from([
+            (
+                "data1".to_string(),
+                vec![
+                    ColumnInfo::new(Some("table1".to_string()), "column1".to_string(), 3, 5),
+                    ColumnInfo::new(Some("table1".to_string()), "column2".to_string(), 4, 5),
+                    ColumnInfo::new(
+                        Some("table1".to_string()),
+                        "unused_column1".to_string(),
+                        5,
+                        5,
+                    ),
+                ],
+            ),
+            (
+                "data2".to_string(),
+                vec![
+                    ColumnInfo::new(Some("table2".to_string()), "column3".to_string(), 10, 5),
+                    ColumnInfo::new(
+                        Some("table2".to_string()),
+                        "unused_column2".to_string(),
+                        11,
+                        5,
+                    ),
+                ],
+            ),
+            (
+                "data3".to_string(),
+                vec![
+                    ColumnInfo::new(Some("data1".to_string()), "column1".to_string(), 16, 5),
+                    ColumnInfo::new(Some("data1".to_string()), "column2".to_string(), 17, 5),
+                    ColumnInfo::new(Some("data2".to_string()), "column3".to_string(), 18, 5),
+                ],
+            ),
+        ]);
+        let final_select_columns = vec![
+            ColumnInfo::new(Some("data3".to_string()), "column1".to_string(), 6, 1),
+            ColumnInfo::new(Some("data3".to_string()), "column2".to_string(), 7, 1),
+            ColumnInfo::new(Some("data3".to_string()), "column3".to_string(), 8, 1),
+        ];
+
+        let unused_columns = find_unused_columns(cte_columns, final_select_columns);
+
+        assert_eq!(unused_columns.len(), 2);
+        let expecteds = ["unused_column1", "unused_column2"];
+        for (expected, actual) in expecteds.iter().zip(unused_columns.iter()) {
+            assert_eq!(*expected.to_string(), actual.column_name);
+        }
     }
 }
