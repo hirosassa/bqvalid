@@ -77,9 +77,9 @@ fn main() -> ExitCode {
 
 fn is_sql(entry: &DirEntry) -> bool {
     entry
-        .file_name()
-        .to_str()
-        .map(|s| s.ends_with(".sql"))
+        .path()
+        .extension()
+        .map(|s| s == "sql")
         .unwrap_or(false)
 }
 
