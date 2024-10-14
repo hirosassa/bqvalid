@@ -1,8 +1,8 @@
 with data1 as (
   select
-    column_1,
-    column_2,
-    unused_column_1
+    column1,
+    column2,
+    unused_column1
   from
     table1 a
 ), data2 as (
@@ -12,15 +12,15 @@ with data1 as (
     data1
 )
 select
-  a.column_1,
-  a.column_2
+  a.column1,
+  a.column2
 from
   data2 a
   inner join
     table2 b
   on
-    a.column_1 = b.column_1
+    a.column1 = b.column1
   inner join
     table3 c
   on
-    a.column_1 = c.column_1
+    a.column1 = c.column1
