@@ -37,7 +37,8 @@ fn main() -> ExitCode {
 
     // stdin
     if args.files.is_empty() {
-        if let Some(diagnostics) = analyse_sql(&mut stdin.lock()) {
+        let diags = analyse_sql(&mut stdin.lock());
+        if let Some(diagnostics) = diags {
             for diagnostic in diagnostics {
                 eprintln!("{}", diagnostic);
             }

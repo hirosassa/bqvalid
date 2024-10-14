@@ -1,5 +1,10 @@
+mod column_info;
+mod table_info;
+use column_info::ColumnInfo;
+use table_info::TableInfo;
+
 use log::debug;
-use std::{cmp::Ord, collections::HashMap, fmt::Display};
+use std::collections::HashMap;
 
 use tree_sitter::{Node, Point, Tree};
 use tree_sitter_traversal::{traverse, Order};
@@ -74,48 +79,6 @@ fn find_unused_columns(
     unused_columns
 }
 
-#[derive(Clone, PartialEq, Eq)]
-struct ColumnInfo {
-    table_name: Option<String>,
-    column_name: String,
-    row: usize,
-    col: usize,
-}
-
-impl ColumnInfo {
-    const fn new(table_name: Option<String>, column_name: String, row: usize, col: usize) -> Self {
-        Self {
-            table_name,
-            column_name,
-            row: row + 1,
-            col: col + 1,
-        }
-    }
-}
-
-impl Display for ColumnInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let table_name = self.table_name.clone().unwrap_or_default();
-        write!(
-            f,
-            "{}:{}:{}:{}",
-            table_name, self.column_name, self.row, self.col
-        )
-    }
-}
-
-impl PartialOrd for ColumnInfo {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for ColumnInfo {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.row.cmp(&other.row).then(self.col.cmp(&other.col))
-    }
-}
-
 fn collect_final_select_columns(
     node: &Node,
     sql: &str,
@@ -124,6 +87,11 @@ fn collect_final_select_columns(
     let mut columns = Vec::new();
     if let Some(final_select) = find_final_select(node) {
         columns.extend(extract_columns(&final_select, sql, cte_columns));
+
+        debug!("Collecting Final select columns");
+        for column in columns.iter() {
+            debug!("{}", column);
+        }
     }
     columns
 }
@@ -138,7 +106,7 @@ fn collect_cte_columns(node: &Node, sql: &str) -> HashMap<String, Vec<ColumnInfo
 
         debug!("{}", cte_name);
         for column in &columns {
-            debug!("{}", column);
+            debug!("\t{}", column);
         }
 
         cte_columns.insert(cte_name, columns);
@@ -148,13 +116,9 @@ fn collect_cte_columns(node: &Node, sql: &str) -> HashMap<String, Vec<ColumnInfo
 }
 
 fn find_ctes<'a>(node: &'a Node<'a>) -> Vec<Node<'a>> {
-    let mut cte_nodes = Vec::new();
-    for n in traverse(node.walk(), Order::Pre) {
-        if n.kind() == "cte" {
-            cte_nodes.push(n);
-        }
-    }
-
+    let cte_nodes = traverse(node.walk(), Order::Pre)
+        .filter(|n| n.kind() == "cte")
+        .collect();
     cte_nodes
 }
 
@@ -188,15 +152,17 @@ fn extract_columns(
 ) -> Vec<ColumnInfo> {
     let mut columns = Vec::new();
     if node.kind() == "select_list" {
-        let from = node.next_named_sibling();
-        let tables = extract_table(from, sql);
+        let from_clause = node.next_named_sibling();
+        let tables = extract_tables(from_clause, sql);
+
         for child in node.children(&mut node.walk()) {
             if child.kind() == "select_expression" {
-                let column = child.utf8_text(sql.as_bytes()).unwrap().to_string();
-                let table = find_original_table(&column, &tables, cte_columns);
+                let column_identifier = child.utf8_text(sql.as_bytes()).unwrap();
+                let (table_alias, column) = parse_column(column_identifier);
+                let table = find_original_table(column, table_alias, &tables, cte_columns);
                 columns.push(ColumnInfo::new(
                     Some(table.clone()),
-                    column,
+                    column.to_string(),
                     child.start_position().row,
                     child.start_position().column,
                 ));
@@ -214,36 +180,56 @@ fn extract_columns(
     columns
 }
 
+fn parse_column(column: &str) -> (&str, &str) {
+    if column.contains('.') {
+        // "alias.column_name" case
+        let splits: Vec<&str> = column.split('.').collect();
+        let table_alias = splits[0];
+        let column_name = splits[1];
+        return (table_alias, column_name);
+    }
+    ("", column)
+}
+
 fn find_original_table(
     column: &str,
-    tables: &Vec<String>,
+    table_alias: &str,
+    tables: &Vec<TableInfo>,
     cte_columns: &HashMap<String, Vec<ColumnInfo>>,
 ) -> String {
     for table in tables {
-        if let Some(columns) = cte_columns.get(table) {
+        // table alias is specified
+        if let Some(alias) = &table.alias_name {
+            if alias == table_alias {
+                return table.table_name.clone();
+            }
+        }
+
+        // The column comes from the CTE
+        if let Some(columns) = cte_columns.get(table.table_name.as_str()) {
             for column_info in columns {
-                if column.contains(&column_info.column_name) {
-                    return table.clone();
+                if column == column_info.column_name {
+                    return table.table_name.clone();
                 }
             }
-        } else {
-            return table.clone();
         }
     }
+
+    // The column is constant value e.g. "select 1"
     "".to_string()
 }
 
 fn expand_asterisk(
     position: Point,
-    cte_names: &Vec<String>,
+    tables: &Vec<TableInfo>,
     cte_columns: &HashMap<String, Vec<ColumnInfo>>,
 ) -> Vec<ColumnInfo> {
     let mut expanded_columns = Vec::new();
-    for cte_name in cte_names {
-        if let Some(cols) = cte_columns.get(cte_name) {
+    for table in tables {
+        if let Some(cols) = cte_columns.get(table.table_name.as_str()) {
             for col in cols {
                 let mut cloned_col = col.clone();
-                cloned_col.table_name = Some(cte_name.clone()); // update table name
+                cloned_col.table_name = Some(table.table_name.to_string());
                 cloned_col.row = position.row;
                 cloned_col.col = position.column;
                 expanded_columns.push(cloned_col);
@@ -253,12 +239,20 @@ fn expand_asterisk(
     expanded_columns
 }
 
-fn extract_table(from: Option<Node>, sql: &str) -> Vec<String> {
+fn extract_tables(from_clause: Option<Node>, sql: &str) -> Vec<TableInfo> {
+    if from_clause.is_none() {
+        return Vec::new();
+    }
+
     let mut tables = Vec::new();
-    if let Some(from_node) = from {
-        for n in traverse(from_node.walk(), Order::Pre) {
-            if n.kind() == "identifier" {
-                tables.push(n.utf8_text(sql.as_bytes()).unwrap().to_string());
+    let from_node = from_clause.unwrap();
+
+    // list "(from_item table_name: (identifier) alias_name: (identifier)))" structure
+    // under the "from_clause" subtree
+    for node in traverse(from_node.walk(), Order::Post) {
+        if node.kind() == "from_item" {
+            if let Some(table_node) = node.child_by_field_name("table_name") {
+                tables.push(parse_table(table_node, sql));
             }
         }
     }
@@ -266,27 +260,38 @@ fn extract_table(from: Option<Node>, sql: &str) -> Vec<String> {
     tables
 }
 
+fn parse_table(table_node: Node, sql: &str) -> TableInfo {
+    let table_name = table_node.utf8_text(sql.as_bytes()).unwrap().to_string();
+    let alias_name = table_node
+        .child_by_field_name("alias_name")
+        .map(|alias_node| alias_node.utf8_text(sql.as_bytes()).unwrap().to_string());
+
+    TableInfo::new(table_name, alias_name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use column_info::ColumnInfo;
     use rstest::rstest;
     use std::fs;
     use tree_sitter::Parser as TsParser;
     use tree_sitter_sql_bigquery::language;
 
-    #[test]
-    fn test_unused_columns_in_cte_exists() {
+    #[rstest]
+    #[case("./sql/unused_column_in_cte_simple.sql", vec!["unused_column1", "unused_column2"])]
+    #[case("./sql/unused_column_in_cte_with_table_alias.sql", vec!["unused_column1", "unused_column1"])]
+    fn test_unused_columns_in_cte_exists(#[case] sql_file: &str, #[case] expecteds: Vec<&str>) {
         let mut parser = TsParser::new();
         parser.set_language(&language()).unwrap();
 
-        let sql = fs::read_to_string("./sql/unused_column_in_cte_simple.sql").unwrap();
+        let sql = fs::read_to_string(sql_file).unwrap();
         let tree = parser.parse(&sql, None).unwrap();
         let root = tree.root_node();
 
         let columns = unused_columns_in_cte(&root, &sql);
-        assert_eq!(columns.len(), 2);
+        assert_eq!(columns.len(), expecteds.len());
 
-        let expecteds = ["unused_column1", "unused_column2"];
         for (expected, actual) in expecteds.iter().zip(columns.iter()) {
             assert_eq!(*expected.to_string(), actual.column_name);
         }
