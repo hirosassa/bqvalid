@@ -1,5 +1,5 @@
 use tree_sitter::{Node, Tree};
-use tree_sitter_traversal::{traverse, Order};
+use tree_sitter_traversal::{Order, traverse};
 
 use crate::diagnostic::Diagnostic;
 

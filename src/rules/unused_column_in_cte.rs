@@ -2,7 +2,7 @@ use log::debug;
 use std::{cmp::Ord, collections::HashMap, fmt::Display};
 
 use tree_sitter::{Node, Point, Tree};
-use tree_sitter_traversal::{traverse, Order};
+use tree_sitter_traversal::{Order, traverse};
 
 use crate::diagnostic::Diagnostic;
 
