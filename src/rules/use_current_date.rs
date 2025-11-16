@@ -23,7 +23,7 @@ fn current_date_used(node: Node, src: &str) -> Option<Diagnostic> {
     let range = node.range();
     let text = &src[range.start_byte..range.end_byte];
 
-    if node.kind() == "identifier" && text.to_ascii_lowercase() == "current_date" {
+    if node.kind() == "identifier" && text.eq_ignore_ascii_case("current_date") {
         return Some(new_current_date_warning(
             range.start_point.row,
             range.start_point.column,

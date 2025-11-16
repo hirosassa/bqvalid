@@ -44,6 +44,7 @@ fn find_unused_columns(
     let mut used_columns = final_select_columns.clone();
     let mut candidates = final_select_columns.clone();
 
+    #[allow(clippy::collapsible_if)]
     while let Some(cand) = candidates.pop() {
         if let Some(key) = &cand.table_name {
             if let Some(columns) = cte_columns.get(key) {

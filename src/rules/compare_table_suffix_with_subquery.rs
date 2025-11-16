@@ -29,7 +29,7 @@ fn compared_with_subquery_in_binary_expression(n: Node, src: &str) -> Option<Dia
         let range = node.range();
         let text = &src[range.start_byte..range.end_byte];
 
-        if node.kind() == "identifier" && text.to_ascii_lowercase() == "_table_suffix" {
+        if node.kind() == "identifier" && text.eq_ignore_ascii_case("_table_suffix") {
             let parent = node.parent().unwrap();
             let mut tc = parent.walk();
             let right_operand = parent.children(&mut tc).last().unwrap();
@@ -52,7 +52,7 @@ fn compared_with_subquery_in_between_expression(n: Node, src: &str) -> Option<Di
         let range = node.range();
         let text = &src[range.start_byte..range.end_byte];
 
-        if node.kind() == "identifier" && text.to_ascii_lowercase() == "_table_suffix" {
+        if node.kind() == "identifier" && text.eq_ignore_ascii_case("_table_suffix") {
             let parent = node.parent().unwrap();
             if parent.kind() == "between_operator" {
                 let mut tc = parent.walk();
