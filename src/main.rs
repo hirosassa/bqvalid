@@ -18,7 +18,6 @@ use walkdir::{DirEntry, WalkDir};
     author = env!("CARGO_PKG_AUTHORS"),
     about = env!("CARGO_PKG_DESCRIPTION"),
     version = env!("CARGO_PKG_VERSION"),
-    arg_required_else_help = true,
 )]
 struct Args {
     files: Vec<String>,
@@ -37,7 +36,8 @@ fn main() -> ExitCode {
 
     // stdin
     if args.files.is_empty() {
-        if let Some(diagnostics) = analyse_sql(&mut stdin.lock()) {
+        let mut handle = stdin.lock();
+        if let Some(diagnostics) = analyse_sql(&mut handle) {
             for diagnostic in diagnostics {
                 eprintln!("{}", diagnostic);
             }
@@ -56,6 +56,7 @@ fn main() -> ExitCode {
 
     let mut all_diagnostics = Vec::new();
 
+    #[allow(clippy::collapsible_if)]
     for target in targets {
         let file_path = target.into_path();
         if let Ok(mut file) = fs::File::open(&file_path) {

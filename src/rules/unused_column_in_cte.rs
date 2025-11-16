@@ -2,7 +2,7 @@ use log::debug;
 use std::{cmp::Ord, collections::HashMap, fmt::Display};
 
 use tree_sitter::{Node, Point, Tree};
-use tree_sitter_traversal::{traverse, Order};
+use tree_sitter_traversal::{Order, traverse};
 
 use crate::diagnostic::Diagnostic;
 
@@ -44,6 +44,7 @@ fn find_unused_columns(
     let mut used_columns = final_select_columns.clone();
     let mut candidates = final_select_columns.clone();
 
+    #[allow(clippy::collapsible_if)]
     while let Some(cand) = candidates.pop() {
         if let Some(key) = &cand.table_name {
             if let Some(columns) = cte_columns.get(key) {
