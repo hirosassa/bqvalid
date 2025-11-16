@@ -3,20 +3,20 @@ name = "bqvalid"
 authors = ["hirosassa <hiro.sassa@gmail.com>"]
 description = "SQL validator tool for BigQuery standard SQL."
 version = "0.0.6"
-edition = "2021"
+edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 tree-sitter = "0.22.6"
-tree-sitter-sql-bigquery = "0.7.0"
+tree-sitter-sql-bigquery = "0.8.0"
 baz-tree-sitter-traversal = "0.1.4"
-clap = { version = "4.5.6", features = ["derive"] }
-walkdir = "2.3.2"
-log = "0.4.21"
-env_logger = "0.11.3"
-clap-verbosity-flag = "2.2.0"
+clap = { version = "4.5.51", features = ["derive"] }
+walkdir = "2.5.0"
+log = "0.4.28"
+env_logger = "0.11.8"
+clap-verbosity-flag = "3.0.4"
 
 [dev-dependencies]
-rstest = "0.21.0"
+rstest = "0.26.1"
 tempfile = "3"
