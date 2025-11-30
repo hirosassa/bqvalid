@@ -1,5 +1,6 @@
 use bqvalid::diagnostic::Diagnostic;
 use bqvalid::rules::compare_table_suffix_with_subquery;
+use bqvalid::rules::unnecessary_order_by;
 use bqvalid::rules::unused_column_in_cte;
 use bqvalid::rules::use_current_date;
 use clap::Parser;
@@ -95,6 +96,10 @@ fn analyse_sql<F: Read>(f: &mut F) -> Option<Vec<Diagnostic>> {
     let mut diagnostics = Vec::new();
 
     if let Some(diags) = compare_table_suffix_with_subquery::check(&tree, &sql) {
+        diagnostics.extend(diags);
+    }
+
+    if let Some(diags) = unnecessary_order_by::check(&tree, &sql) {
         diagnostics.extend(diags);
     }
 
