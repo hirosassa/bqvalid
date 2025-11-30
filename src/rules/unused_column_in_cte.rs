@@ -45,7 +45,6 @@ fn unused_columns_in_cte(node: &Node, sql: &str) -> Vec<ColumnInfo> {
     collect_unmarked_columns(&cte_graph)
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ColumnInfo {
     table_name: Option<String>,
@@ -165,7 +164,6 @@ fn extract_columns(
     cte_columns: &HashMap<String, Vec<ColumnInfo>>,
 ) -> Vec<ColumnInfo> {
     let mut columns = Vec::new();
-
 
     if node.kind() == "select_list" {
         let from = node.next_named_sibling();
@@ -346,11 +344,7 @@ fn should_skip_column(cte_node: &CTENode, column_name: &str) -> bool {
     cte_node.used_column_names.contains(column_name)
 }
 
-fn mark_column_as_used(
-    graph: &mut HashMap<String, CTENode>,
-    table_name: &str,
-    column_name: &str,
-) {
+fn mark_column_as_used(graph: &mut HashMap<String, CTENode>, table_name: &str, column_name: &str) {
     if let Some(node) = graph.get_mut(table_name) {
         node.used_column_names.insert(column_name.to_string());
     }
@@ -371,7 +365,10 @@ fn trace_column_dependencies(
             // Only trace back if source_table is also a CTE
             if graph.contains_key(actual_source_table) {
                 let search_base_name = extract_column_name(column_name);
-                queue.push_back((actual_source_table.to_string(), search_base_name.to_string()));
+                queue.push_back((
+                    actual_source_table.to_string(),
+                    search_base_name.to_string(),
+                ));
             }
         }
     }
@@ -390,7 +387,6 @@ fn extract_column_name(column_ref: &str) -> &str {
 fn extract_table_name(table_ref: &str) -> &str {
     table_ref.split('.').next().unwrap_or(table_ref)
 }
-
 
 fn collect_unmarked_columns(graph: &HashMap<String, CTENode>) -> Vec<ColumnInfo> {
     let mut unused = Vec::new();
@@ -504,5 +500,4 @@ mod tests {
             assert_eq!(*expected.to_string(), final_select_columns[i].column_name);
         }
     }
-
 }
