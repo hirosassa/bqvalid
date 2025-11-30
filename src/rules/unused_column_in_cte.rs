@@ -1,5 +1,9 @@
 use log::debug;
-use std::{cmp::Ord, collections::HashMap, fmt::Display};
+use std::{
+    cmp::Ord,
+    collections::{HashMap, HashSet, VecDeque},
+    fmt::Display,
+};
 
 use tree_sitter::{Node, Point, Tree};
 use tree_sitter_traversal::{Order, traverse};
@@ -34,48 +38,14 @@ fn new_unused_column_warning(column: &ColumnInfo) -> Diagnostic {
 fn unused_columns_in_cte(node: &Node, sql: &str) -> Vec<ColumnInfo> {
     let cte_columns = collect_cte_columns(node, sql);
     let final_select_columns = collect_final_select_columns(node, sql, &cte_columns);
-    find_unused_columns(cte_columns, final_select_columns)
+
+    let mut cte_graph = build_graph_from_existing_data(&cte_columns);
+    mark_used_columns(&mut cte_graph, final_select_columns);
+
+    collect_unmarked_columns(&cte_graph)
 }
 
-fn find_unused_columns(
-    cte_columns: HashMap<String, Vec<ColumnInfo>>,
-    final_select_columns: Vec<ColumnInfo>,
-) -> Vec<ColumnInfo> {
-    let mut used_columns = final_select_columns.clone();
-    let mut candidates = final_select_columns.clone();
-
-    #[allow(clippy::collapsible_if)]
-    while let Some(cand) = candidates.pop() {
-        if let Some(key) = &cand.table_name {
-            if let Some(columns) = cte_columns.get(key) {
-                for col in columns {
-                    if col.column_name == cand.column_name {
-                        used_columns.push(col.clone());
-                        candidates.push(col.clone());
-                    }
-                }
-            }
-        }
-    }
-
-    let mut all_columns = cte_columns
-        .values()
-        .flatten()
-        .cloned()
-        .collect::<Vec<ColumnInfo>>();
-    all_columns.extend(final_select_columns);
-
-    let mut unused_columns = all_columns
-        .iter()
-        .filter(|c| !used_columns.contains(c))
-        .cloned()
-        .collect::<Vec<ColumnInfo>>();
-    unused_columns.sort();
-
-    unused_columns
-}
-
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ColumnInfo {
     table_name: Option<String>,
     column_name: String,
@@ -115,6 +85,12 @@ impl Ord for ColumnInfo {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.row.cmp(&other.row).then(self.col.cmp(&other.col))
     }
+}
+
+#[derive(Debug, Clone)]
+struct CTENode {
+    columns: Vec<ColumnInfo>,
+    used_column_names: HashSet<String>,
 }
 
 fn collect_final_select_columns(
@@ -188,6 +164,7 @@ fn extract_columns(
     cte_columns: &HashMap<String, Vec<ColumnInfo>>,
 ) -> Vec<ColumnInfo> {
     let mut columns = Vec::new();
+
     if node.kind() == "select_list" {
         let from = node.next_named_sibling();
         let tables = extract_table(from, sql);
@@ -208,11 +185,67 @@ fn extract_columns(
         }
     }
 
+    // Extract columns from JOIN ON conditions
+    if node.kind() == "join_condition" {
+        // Get tables from the FROM clause for context
+        let tables = extract_tables_from_parent(node, sql);
+        extract_columns_from_condition(node, sql, &tables, cte_columns, &mut columns);
+    }
+
     for child in node.named_children(&mut node.walk()) {
         columns.extend(extract_columns(&child, sql, cte_columns));
     }
 
     columns
+}
+
+fn extract_tables_from_parent(node: &Node, sql: &str) -> Vec<String> {
+    // Walk up to find the FROM clause
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        if parent.kind() == "from_clause" {
+            return extract_table(Some(parent), sql);
+        }
+        current = parent.parent();
+    }
+    Vec::new()
+}
+
+fn extract_columns_from_condition(
+    node: &Node,
+    sql: &str,
+    tables: &[String],
+    cte_columns: &HashMap<String, Vec<ColumnInfo>>,
+    columns: &mut Vec<ColumnInfo>,
+) {
+    let actual_tables: Vec<String> = tables
+        .iter()
+        .filter(|t| !t.contains('.'))
+        .cloned()
+        .collect();
+
+    // Traverse the condition tree to find all column references
+    for child in traverse(node.walk(), Order::Pre) {
+        if child.kind() == "field" || child.kind() == "identifier" {
+            let column_text = child.utf8_text(sql.as_bytes()).unwrap().to_string();
+
+            // If column reference has a table prefix (e.g., "data1.id"), use that directly
+            let table = if column_text.contains('.') {
+                column_text.split('.').next().unwrap_or("").to_string()
+            } else {
+                find_original_table(&column_text, &actual_tables, cte_columns)
+            };
+
+            if !table.is_empty() {
+                columns.push(ColumnInfo::new(
+                    Some(table),
+                    column_text,
+                    child.start_position().row,
+                    child.start_position().column,
+                ));
+            }
+        }
+    }
 }
 
 fn find_original_table(
@@ -267,6 +300,110 @@ fn extract_table(from: Option<Node>, sql: &str) -> Vec<String> {
     tables
 }
 
+fn build_graph_from_existing_data(
+    cte_columns: &HashMap<String, Vec<ColumnInfo>>,
+) -> HashMap<String, CTENode> {
+    let mut graph = HashMap::new();
+
+    for (cte_name, columns) in cte_columns {
+        let cte_node = CTENode {
+            columns: columns.clone(),
+            used_column_names: HashSet::new(),
+        };
+
+        graph.insert(cte_name.clone(), cte_node);
+    }
+
+    graph
+}
+
+fn mark_used_columns(graph: &mut HashMap<String, CTENode>, final_columns: Vec<ColumnInfo>) {
+    let mut queue: VecDeque<(String, String)> = VecDeque::new();
+
+    // Add final select columns to queue
+    for col in final_columns {
+        if let Some(table_name) = col.table_name {
+            queue.push_back((table_name, col.column_name));
+        }
+    }
+
+    // Process queue until empty
+    while let Some((table_name, column_name)) = queue.pop_front() {
+        if let Some(cte_node) = graph.get(&table_name).cloned() {
+            if should_skip_column(&cte_node, &column_name) {
+                continue;
+            }
+
+            mark_column_as_used(graph, &table_name, &column_name);
+            trace_column_dependencies(&cte_node, &column_name, graph, &mut queue);
+        }
+    }
+}
+
+fn should_skip_column(cte_node: &CTENode, column_name: &str) -> bool {
+    cte_node.used_column_names.contains(column_name)
+}
+
+fn mark_column_as_used(graph: &mut HashMap<String, CTENode>, table_name: &str, column_name: &str) {
+    if let Some(node) = graph.get_mut(table_name) {
+        node.used_column_names.insert(column_name.to_string());
+    }
+}
+
+fn trace_column_dependencies(
+    cte_node: &CTENode,
+    column_name: &str,
+    graph: &HashMap<String, CTENode>,
+    queue: &mut VecDeque<(String, String)>,
+) {
+    for col_info in &cte_node.columns {
+        if is_column_match(col_info, column_name)
+            && let Some(source_table) = &col_info.table_name
+        {
+            let actual_source_table = extract_table_name(source_table);
+
+            // Only trace back if source_table is also a CTE
+            if graph.contains_key(actual_source_table) {
+                let search_base_name = extract_column_name(column_name);
+                queue.push_back((
+                    actual_source_table.to_string(),
+                    search_base_name.to_string(),
+                ));
+            }
+        }
+    }
+}
+
+fn is_column_match(col_info: &ColumnInfo, search_column: &str) -> bool {
+    let col_base_name = extract_column_name(&col_info.column_name);
+    let search_base_name = extract_column_name(search_column);
+    col_base_name == search_base_name || col_info.column_name == search_column
+}
+
+fn extract_column_name(column_ref: &str) -> &str {
+    column_ref.split('.').next_back().unwrap_or(column_ref)
+}
+
+fn extract_table_name(table_ref: &str) -> &str {
+    table_ref.split('.').next().unwrap_or(table_ref)
+}
+
+fn collect_unmarked_columns(graph: &HashMap<String, CTENode>) -> Vec<ColumnInfo> {
+    let mut unused = Vec::new();
+
+    for cte_node in graph.values() {
+        for col in &cte_node.columns {
+            // Check if this column is marked as used
+            if !cte_node.used_column_names.contains(&col.column_name) {
+                unused.push(col.clone());
+            }
+        }
+    }
+
+    unused.sort();
+    unused
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,20 +412,26 @@ mod tests {
     use tree_sitter::Parser as TsParser;
     use tree_sitter_sql_bigquery::language;
 
-    #[test]
-    fn test_unused_columns_in_cte_exists() {
+    #[rstest]
+    #[case("./sql/unused_column_in_cte_simple.sql", 2, vec!["unused_column1", "unused_column2"])]
+    #[case("./sql/unused_column_in_cte_complex.sql", 6, vec!["unused_field1", "unused_field2", "unused_amount_field", "price", "unused_price_field", "another_unused"])]
+    #[case("./sql/unused_column_in_cte_join_only.sql", 1, vec!["unused_field"])]
+    fn test_unused_columns_in_cte_exists(
+        #[case] sql_file: &str,
+        #[case] expected_count: usize,
+        #[case] expected_names: Vec<&str>,
+    ) {
         let mut parser = TsParser::new();
         parser.set_language(&language()).unwrap();
 
-        let sql = fs::read_to_string("./sql/unused_column_in_cte_simple.sql").unwrap();
+        let sql = fs::read_to_string(sql_file).unwrap();
         let tree = parser.parse(&sql, None).unwrap();
         let root = tree.root_node();
 
         let columns = unused_columns_in_cte(&root, &sql);
-        assert_eq!(columns.len(), 2);
+        assert_eq!(columns.len(), expected_count);
 
-        let expecteds = ["unused_column1", "unused_column2"];
-        for (expected, actual) in expecteds.iter().zip(columns.iter()) {
+        for (expected, actual) in expected_names.iter().zip(columns.iter()) {
             assert_eq!(*expected.to_string(), actual.column_name);
         }
     }
@@ -347,65 +490,14 @@ mod tests {
 
         let cte_columns = collect_cte_columns(&root, &sql);
         let final_select_columns = collect_final_select_columns(&root, &sql, &cte_columns);
-        assert_eq!(final_select_columns.len(), 3);
+        // Now includes JOIN condition columns (data1.column1 from ON clause)
+        assert_eq!(final_select_columns.len(), 5);
 
-        let expected_table = "data3";
-        let expected_columns = ["column1", "column2", "column3"];
-        for (expected, actual) in expected_columns.iter().zip(final_select_columns.iter()) {
-            assert_eq!(expected_table, actual.table_name.clone().unwrap());
-            assert_eq!(*expected.to_string(), actual.column_name);
-        }
-    }
-
-    #[test]
-    fn test_find_unused_columns() {
-        let cte_columns = HashMap::from([
-            (
-                "data1".to_string(),
-                vec![
-                    ColumnInfo::new(Some("table1".to_string()), "column1".to_string(), 3, 5),
-                    ColumnInfo::new(Some("table1".to_string()), "column2".to_string(), 4, 5),
-                    ColumnInfo::new(
-                        Some("table1".to_string()),
-                        "unused_column1".to_string(),
-                        5,
-                        5,
-                    ),
-                ],
-            ),
-            (
-                "data2".to_string(),
-                vec![
-                    ColumnInfo::new(Some("table2".to_string()), "column3".to_string(), 10, 5),
-                    ColumnInfo::new(
-                        Some("table2".to_string()),
-                        "unused_column2".to_string(),
-                        11,
-                        5,
-                    ),
-                ],
-            ),
-            (
-                "data3".to_string(),
-                vec![
-                    ColumnInfo::new(Some("data1".to_string()), "column1".to_string(), 16, 5),
-                    ColumnInfo::new(Some("data1".to_string()), "column2".to_string(), 17, 5),
-                    ColumnInfo::new(Some("data2".to_string()), "column3".to_string(), 18, 5),
-                ],
-            ),
-        ]);
-        let final_select_columns = vec![
-            ColumnInfo::new(Some("data3".to_string()), "column1".to_string(), 6, 1),
-            ColumnInfo::new(Some("data3".to_string()), "column2".to_string(), 7, 1),
-            ColumnInfo::new(Some("data3".to_string()), "column3".to_string(), 8, 1),
-        ];
-
-        let unused_columns = find_unused_columns(cte_columns, final_select_columns);
-
-        assert_eq!(unused_columns.len(), 2);
-        let expecteds = ["unused_column1", "unused_column2"];
-        for (expected, actual) in expecteds.iter().zip(unused_columns.iter()) {
-            assert_eq!(*expected.to_string(), actual.column_name);
+        // Check the first few columns (from SELECT *)
+        let expected_columns_from_select = vec!["column1", "column2", "column3"];
+        for (i, expected) in expected_columns_from_select.iter().enumerate() {
+            assert_eq!("data3", final_select_columns[i].table_name.clone().unwrap());
+            assert_eq!(*expected.to_string(), final_select_columns[i].column_name);
         }
     }
 }
