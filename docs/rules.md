@@ -75,3 +75,74 @@ select
 from
   data3
 ```
+
+## Unnecessary ORDER BY in CTE or subquery
+
+ORDER BY clauses in CTEs or subqueries have no effect unless they are used with LIMIT/OFFSET or within aggregate functions like ARRAY_AGG. Using ORDER BY without these constructs wastes resources and provides no benefit, as the ordering is not guaranteed to be preserved in the final result.
+
+ref: [BigQuery documentation on query execution](https://cloud.google.com/bigquery/docs/reference/standard-sql/query-syntax#order_by_clause)
+
+### Example
+
+```sql
+-- Unnecessary ORDER BY in CTE
+WITH sorted_data AS (
+  SELECT
+    id,
+    name
+  FROM
+    table1
+  ORDER BY id  -- This ORDER BY has no effect
+)
+SELECT
+  *
+FROM
+  sorted_data
+
+-- Unnecessary ORDER BY in subquery
+SELECT
+  *
+FROM (
+  SELECT
+    id,
+    name
+  FROM
+    table1
+  ORDER BY id  -- This ORDER BY has no effect
+)
+WHERE
+  name = 'test'
+```
+
+### Valid use cases
+
+ORDER BY is meaningful in the following cases:
+
+```sql
+-- Valid: ORDER BY with LIMIT
+WITH top_users AS (
+  SELECT
+    id,
+    name
+  FROM
+    table1
+  ORDER BY id
+  LIMIT 10  -- ORDER BY is necessary for TOP-N query
+)
+SELECT * FROM top_users
+
+-- Valid: ORDER BY in ARRAY_AGG
+SELECT
+  user_id,
+  ARRAY_AGG(event_name ORDER BY timestamp) as events  -- ORDER BY controls array order
+FROM events
+GROUP BY user_id
+
+-- Valid: ORDER BY in final SELECT
+SELECT
+  id,
+  name
+FROM
+  table1
+ORDER BY id  -- ORDER BY in final SELECT controls output order
+```
