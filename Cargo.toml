@@ -2,7 +2,7 @@
 name = "bqvalid"
 authors = ["hirosassa <hiro.sassa@gmail.com>"]
 description = "SQL validator tool for BigQuery standard SQL."
-version = "0.1.0"
+version = "0.0.0"
 edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

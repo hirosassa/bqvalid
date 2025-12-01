@@ -1,0 +1,86 @@
+version: 2
+
+project_name: bqvalid
+
+builds:
+  - id: build-linux-windows
+    skip: '{{ eq .Runtime.Goos "darwin" }}'
+    builder: rust
+    binary: bqvalid
+    targets:
+      - x86_64-unknown-linux-gnu
+      - x86_64-unknown-linux-musl
+      - x86_64-pc-windows-gnu
+    tool: cargo
+    command: zigbuild
+    flags:
+      - --release
+      - --all-features
+    env:
+      - BUILD_VERSION={{ .Version }}
+
+  - id: build-macos
+    skip: '{{ ne .Runtime.Goos "darwin" }}'
+    builder: rust
+    binary: bqvalid
+    targets:
+      - x86_64-apple-darwin
+      - aarch64-apple-darwin
+    tool: cross
+    command: build
+    flags:
+      - --release
+      - --all-features
+    env:
+      - BUILD_VERSION={{ .Version }}
+
+archives:
+  - formats: [ 'tar.gz' ]
+    format_overrides:
+      - goos: windows
+        formats: [ 'zip' ]
+    name_template: >-
+      {{ .ProjectName }}-
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}-
+      {{- .Os }}
+    ids:
+      - build-linux-windows
+      - build-macos
+    allow_different_binary_count: true
+
+checksum:
+  disable: true
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^ci:'
+      - '^refactor:'
+      - Merge pull request
+      - Merge branch
+  groups:
+    - title: Features
+      regexp: "^.*feat[(\\w)]*:+.*$"
+      order: 0
+    - title: 'Bug fixes'
+      regexp: "^.*fix[(\\w)]*:+.*$"
+      order: 1
+    - title: Others
+      order: 999
+
+release:
+  github:
+    owner: hirosassa
+    name: bqvalid
+  draft: false
+  prerelease: auto
+  name_template: "{{.Tag}}"
+  header: |
+    ## Release {{.Tag}} ({{.Date}})
+
+    Welcome to this new release!

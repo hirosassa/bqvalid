@@ -5,51 +5,62 @@ on:
     tags:
       - '*'
 
+permissions:
+  contents: write
+
 jobs:
-  build:
-    name: Release binary
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            artifact_name: bqvalid
-            asset_name: bqvalid-x86_64-unknown-linux-gnu
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-musl
-            artifact_name: bqvalid
-            asset_name: bqvalid-x86_64-unknown-linux-musl
-          - os: ubuntu-latest
-            target: x86_64-pc-windows-gnu
-            artifact_name: bqvalid.exe
-            asset_name: bqvalid-x86_64-pc-windows-gnu.exe
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            artifact_name: bqvalid
-            asset_name: bqvalid-x86_64-apple-darwin
-
-
-    runs-on: ${{ matrix.os }}
-
+  goreleaser-ubuntu:
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0
 
-      - name: Install toolchain
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils-mingw-w64
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2.0.5
+        with:
+          version: 2024.5.0-mach
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          cargo install cargo-zigbuild
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6.3.0
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  goreleaser-mac:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
           cargo install cross
-          rustup target add ${{ matrix.target }}
 
-      - name: Cross build with all features
-        run: cross build --release --target ${{ matrix.target }} --all-features --verbose
-
-      - name: Upload binaries to release
-        uses: svenstaro/upload-release-action@2.7.0
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6.3.0
         with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
-          asset_name: ${{ matrix.asset_name }}
-          tag: ${{ github.ref }}
-          overwrite: true
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
