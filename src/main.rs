@@ -13,12 +13,19 @@ use tree_sitter::Parser as TsParser;
 use tree_sitter_sql_bigquery::language;
 use walkdir::{DirEntry, WalkDir};
 
+fn get_version() -> &'static str {
+    option_env!("CARGO_PKG_VERSION")
+        .filter(|&v| v != "0.0.0")
+        .or(option_env!("BUILD_VERSION"))
+        .unwrap_or("unknown")
+}
+
 #[derive(Debug, Parser)]
 #[clap(
     name = env!("CARGO_PKG_NAME"),
     author = env!("CARGO_PKG_AUTHORS"),
     about = env!("CARGO_PKG_DESCRIPTION"),
-    version = env!("CARGO_PKG_VERSION"),
+    version = get_version(),
 )]
 struct Args {
     files: Vec<String>,
