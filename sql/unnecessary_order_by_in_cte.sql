@@ -1,13 +1,13 @@
 -- Unnecessary ORDER BY in CTE
-WITH sorted_data AS (
-  SELECT
+with sorted_data as (
+  select
     id,
     name
-  FROM
+  from
     table1
-  ORDER BY id  -- This ORDER BY is ignored
+  order by id  -- This ORDER BY is ignored
 )
-SELECT
+select
   *
-FROM
+from
   sorted_data
