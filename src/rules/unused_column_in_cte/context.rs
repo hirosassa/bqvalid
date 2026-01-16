@@ -32,7 +32,7 @@ impl<'a> AnalysisContext<'a> {
 
     /// Add a CTE definition to the context
     pub fn add_cte(&mut self, cte_name: String, columns: Vec<ColumnInfo>) {
-        self.graph.add_cte(cte_name.clone(), columns.clone());
+        self.graph.add_cte(&cte_name, &columns);
         self.cte_columns.insert(cte_name, columns);
     }
 

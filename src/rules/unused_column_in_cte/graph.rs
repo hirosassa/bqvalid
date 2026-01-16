@@ -23,12 +23,12 @@ impl DependencyGraph {
     }
 
     /// Add a CTE with its columns to the graph
-    pub fn add_cte(&mut self, cte_name: String, columns: Vec<ColumnInfo>) {
+    pub fn add_cte(&mut self, cte_name: &str, columns: &[ColumnInfo]) {
         let node = CTENode {
-            columns,
+            columns: columns.to_vec(),
             used_column_names: HashSet::new(),
         };
-        self.nodes.insert(cte_name, node);
+        self.nodes.insert(cte_name.to_string(), node);
     }
 
     /// Mark a column as used in a specific CTE
@@ -112,7 +112,7 @@ mod tests {
             ColumnInfo::new(Some("cte1".to_string()), "col2".to_string(), None, 0, 5),
         ];
 
-        graph.add_cte("cte1".to_string(), columns);
+        graph.add_cte("cte1", &columns);
 
         assert_eq!(graph.nodes.len(), 1);
         assert!(graph.nodes.contains_key("cte1"));
@@ -130,7 +130,7 @@ mod tests {
             0,
         )];
 
-        graph.add_cte("cte1".to_string(), columns);
+        graph.add_cte("cte1", &columns);
         graph.mark_column_used("cte1", "col1");
 
         assert!(graph.is_column_used("cte1", "col1"));
@@ -147,7 +147,7 @@ mod tests {
             ColumnInfo::new(Some("cte1".to_string()), "col3".to_string(), None, 0, 10),
         ];
 
-        graph.add_cte("cte1".to_string(), columns);
+        graph.add_cte("cte1", &columns);
 
         // Mark col1 and col2 as used
         graph.mark_column_used("cte1", "col1");
@@ -178,7 +178,7 @@ mod tests {
             0,
         )];
 
-        graph.add_cte("cte1".to_string(), columns);
+        graph.add_cte("cte1", &columns);
 
         // Mark using base name
         graph.mark_column_used("cte1", "col1");
