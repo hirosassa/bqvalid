@@ -1,1 +1,5 @@
 /target
+
+# dhat heap profiling
+dhat-*.json
+dhat/

@@ -13,6 +13,18 @@ impl Diagnostic {
     pub const fn new(row: usize, col: usize, message: String) -> Self {
         Self { row, col, message }
     }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    pub const fn row(&self) -> usize {
+        self.row
+    }
+
+    pub const fn col(&self) -> usize {
+        self.col
+    }
 }
 
 impl Display for Diagnostic {

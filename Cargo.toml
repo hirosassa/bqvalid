@@ -20,3 +20,13 @@ clap-verbosity-flag = "3.0.4"
 [dev-dependencies]
 rstest = "0.26.1"
 tempfile = "3"
+criterion = { version = "0.5", features = ["html_reports"] }
+dhat = "0.3"
+
+[[bench]]
+name = "unused_column_in_cte"
+harness = false
+
+[[bench]]
+name = "memory_profile"
+harness = false
