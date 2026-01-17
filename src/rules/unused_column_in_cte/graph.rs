@@ -45,12 +45,6 @@ impl DependencyGraph {
             .is_some_and(|node| node.used_column_names.contains(column_name))
     }
 
-    /// Get all columns for a specific CTE
-    #[allow(dead_code)]
-    pub fn get_columns(&self, table_name: &str) -> Option<&Vec<ColumnInfo>> {
-        self.nodes.get(table_name).map(|node| &node.columns)
-    }
-
     /// Collect all unused columns across all CTEs
     pub fn collect_unused_columns(&self) -> Vec<ColumnInfo> {
         let mut unused = Vec::new();
@@ -72,12 +66,6 @@ impl DependencyGraph {
 
         unused.sort();
         unused
-    }
-
-    /// Get reference to all CTEs
-    #[allow(dead_code)]
-    pub const fn get_all_ctes(&self) -> &HashMap<String, CTENode> {
-        &self.nodes
     }
 }
 

@@ -13,7 +13,11 @@ pub struct ColumnInfo {
 }
 
 impl ColumnInfo {
-    pub const fn new(
+    // Note: While this function could technically be declared as `const fn`,
+    // it cannot be called in const contexts because it takes `String` parameters
+    // which require non-const operations like `to_string()` to construct.
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn new(
         table_name: Option<String>,
         column_name: String,
         original_column_name: Option<String>,
