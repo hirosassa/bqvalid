@@ -20,7 +20,7 @@ impl NodeVisitor for PivotVisitor {
         let (tables, alias_map) = find_tables_for_pivot(node, sql);
 
         // Extract all field/identifier references from the PIVOT clause
-        extract_and_mark_fields(node, sql, &tables, &alias_map, context);
+        utils::extract_and_mark_fields(node, sql, &tables, &alias_map, context);
     }
 }
 
@@ -47,43 +47,6 @@ fn find_tables_for_pivot(
         current = parent.parent();
     }
     (Vec::new(), std::collections::HashMap::new())
-}
-
-/// Recursively extract all field/identifier references and mark them as used
-fn extract_and_mark_fields(
-    node: &Node,
-    sql: &str,
-    tables: &[String],
-    alias_map: &std::collections::HashMap<String, String>,
-    context: &mut AnalysisContext,
-) {
-    // Process current node if it's a field, identifier, or input_column
-    if node.kind() == "field" || node.kind() == "identifier" || node.kind() == "input_column" {
-        let field_text = node.utf8_text(sql.as_bytes()).unwrap_or("");
-        let col_name = utils::extract_column_name(field_text);
-
-        // Skip function names
-        if let Some(parent) = node.parent()
-            && parent.kind() == "function_call"
-            && let Some(name_node) = parent.child_by_field_name("name")
-            && name_node.id() == node.id()
-        {
-            // This is a function name, skip it
-            return;
-        }
-
-        // Find which table this column belongs to
-        let table = utils::find_original_table(field_text, tables, alias_map, &context.cte_columns);
-
-        if !table.is_empty() {
-            context.mark_used(&table, col_name);
-        }
-    }
-
-    // Recursively process children
-    for child in node.children(&mut node.walk()) {
-        extract_and_mark_fields(&child, sql, tables, alias_map, context);
-    }
 }
 
 #[cfg(test)]

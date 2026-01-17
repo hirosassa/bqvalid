@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use tree_sitter::Node;
 use tree_sitter_traversal::{Order, traverse};
 
+use super::context::AnalysisContext;
 use super::models::ColumnInfo;
 
 /// Extract CTE name from a CTE node
@@ -17,6 +18,24 @@ pub fn get_cte_name<'a>(cte_node: &Node, sql: &'a str) -> &'a str {
 /// e.g., "table.column" -> "column", "column" -> "column"
 pub fn extract_column_name(column_ref: &str) -> &str {
     column_ref.split('.').next_back().unwrap_or(column_ref)
+}
+
+/// Check if a node is a function name that should be skipped
+/// Returns true if the node is the name part of a function_call
+pub fn is_function_name(node: &Node) -> bool {
+    if let Some(parent) = node.parent()
+        && parent.kind() == "function_call"
+    {
+        // Check using field name (preferred method)
+        if let Some(name_node) = parent.child_by_field_name("name") {
+            return name_node.id() == node.id();
+        }
+        // Fallback: check if it's the first child
+        if let Some(first_child) = parent.child(0) {
+            return first_child.id() == node.id();
+        }
+    }
+    false
 }
 
 /// Extract table name from a potentially qualified table reference
@@ -94,6 +113,39 @@ pub fn find_original_table(
         }
     }
     String::new()
+}
+
+/// Recursively extract all field/identifier references and mark them as used
+/// This function processes field, identifier, and input_column nodes
+pub fn extract_and_mark_fields(
+    node: &Node,
+    sql: &str,
+    tables: &[String],
+    alias_map: &HashMap<String, String>,
+    context: &mut AnalysisContext,
+) {
+    // Process current node if it's a field, identifier, or input_column
+    if node.kind() == "field" || node.kind() == "identifier" || node.kind() == "input_column" {
+        // Skip function names
+        if is_function_name(node) {
+            return;
+        }
+
+        let field_text = node.utf8_text(sql.as_bytes()).unwrap_or("");
+        let col_name = extract_column_name(field_text);
+
+        // Find which table this column belongs to
+        let table = find_original_table(field_text, tables, alias_map, &context.cte_columns);
+
+        if !table.is_empty() {
+            context.mark_used(&table, col_name);
+        }
+    }
+
+    // Recursively process children
+    for child in node.children(&mut node.walk()) {
+        extract_and_mark_fields(&child, sql, tables, alias_map, context);
+    }
 }
 
 #[cfg(test)]

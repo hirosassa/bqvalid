@@ -135,15 +135,8 @@ fn extract_columns_from_condition(
     // Traverse the condition tree to find all column references
     for child in traverse(node.walk(), Order::Pre) {
         if child.kind() == "field" || child.kind() == "identifier" {
-            // Check if this identifier is a function name (skip those)
-            let is_function_name = child.parent().is_some_and(|parent| {
-                parent.kind() == "function_call"
-                    && parent
-                        .child(0)
-                        .is_some_and(|first_child| first_child.id() == child.id())
-            });
-
-            if is_function_name {
+            // Skip function names
+            if utils::is_function_name(&child) {
                 continue;
             }
 

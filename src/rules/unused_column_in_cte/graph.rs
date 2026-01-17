@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::models::ColumnInfo;
+use super::utils::extract_column_name;
 
 /// CTE node in the dependency graph
 #[derive(Debug, Clone)]
@@ -75,12 +76,6 @@ impl Default for DependencyGraph {
     }
 }
 
-/// Extract column name from a potentially qualified column reference
-/// e.g., "table.column" -> "column", "column" -> "column"
-fn extract_column_name(column_ref: &str) -> &str {
-    column_ref.split('.').next_back().unwrap_or(column_ref)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,13 +140,6 @@ mod tests {
 
         assert_eq!(unused.len(), 1);
         assert_eq!(unused[0].column_name, "col3");
-    }
-
-    #[test]
-    fn test_extract_column_name() {
-        assert_eq!(extract_column_name("column"), "column");
-        assert_eq!(extract_column_name("table.column"), "column");
-        assert_eq!(extract_column_name("schema.table.column"), "column");
     }
 
     #[test]
