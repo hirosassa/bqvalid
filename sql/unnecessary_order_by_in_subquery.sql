@@ -1,13 +1,13 @@
 -- Unnecessary ORDER BY in subquery
-SELECT
+select
   *
-FROM (
-  SELECT
+from (
+  select
     id,
     name
-  FROM
+  from
     table1
-  ORDER BY id  -- This ORDER BY is ignored
+  order by id  -- This ORDER BY is ignored
 )
-WHERE
+where
   name = 'test'

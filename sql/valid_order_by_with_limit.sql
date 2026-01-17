@@ -1,35 +1,35 @@
 -- Valid: ORDER BY with LIMIT in CTE
-WITH top_users AS (
-  SELECT
+with top_users as (
+  select
     id,
     name
-  FROM
+  from
     table1
-  ORDER BY id
-  LIMIT 10
+  order by id
+  limit 10
 )
-SELECT
+select
   *
-FROM
+from
   top_users
 
 -- Valid: ORDER BY with LIMIT in subquery
-SELECT
+select
   *
-FROM (
-  SELECT
+from (
+  select
     id,
     name
-  FROM
+  from
     table1
-  ORDER BY id
-  LIMIT 10
+  order by id
+  limit 10
 )
 
 -- Valid: ORDER BY in final SELECT
-SELECT
+select
   id,
   name
-FROM
+from
   table1
-ORDER BY id
+order by id
