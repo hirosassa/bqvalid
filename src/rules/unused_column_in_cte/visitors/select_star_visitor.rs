@@ -64,17 +64,10 @@ fn mark_source_columns_as_used(select_list: &Node, context: &mut AnalysisContext
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tree_sitter::Parser as TsParser;
-    use tree_sitter_sql_bigquery::language;
+    use crate::rules::helpers::parse_sql;
     use tree_sitter_traversal::{Order, traverse};
 
     use crate::rules::unused_column_in_cte::visitors::{CteVisitor, SelectVisitor};
-
-    fn parse_sql(sql: &str) -> tree_sitter::Tree {
-        let mut parser = TsParser::new();
-        parser.set_language(&language()).unwrap();
-        parser.parse(sql, None).unwrap()
-    }
 
     #[test]
     fn test_select_star_visitor() {

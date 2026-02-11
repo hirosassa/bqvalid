@@ -175,15 +175,8 @@ fn expand_asterisk(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tree_sitter::Parser as TsParser;
-    use tree_sitter_sql_bigquery::language;
+    use crate::rules::helpers::parse_sql;
     use tree_sitter_traversal::{Order, traverse};
-
-    fn parse_sql(sql: &str) -> tree_sitter::Tree {
-        let mut parser = TsParser::new();
-        parser.set_language(&language()).unwrap();
-        parser.parse(sql, None).unwrap()
-    }
 
     #[test]
     fn test_cte_visitor() {

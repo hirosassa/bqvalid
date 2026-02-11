@@ -27,8 +27,8 @@ pub fn is_function_name(node: &Node) -> bool {
         && parent.kind() == "function_call"
     {
         // Check using field name (preferred method)
-        if let Some(name_node) = parent.child_by_field_name("name") {
-            return name_node.id() == node.id();
+        if let Some(func_node) = parent.child_by_field_name("function") {
+            return func_node.id() == node.id();
         }
         // Fallback: check if it's the first child
         if let Some(first_child) = parent.child(0) {
