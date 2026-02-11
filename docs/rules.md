@@ -146,3 +146,99 @@ FROM
   table1
 ORDER BY id  -- ORDER BY in final SELECT controls output order
 ```
+
+## Invalid GROUP BY usage
+
+When using GROUP BY, all columns in the SELECT clause must either:
+1. Appear in the GROUP BY clause, or
+2. Be used within an aggregate function
+
+Columns that don't meet either condition will cause a SQL error or produce incorrect results. This rule helps catch these issues early in development.
+
+ref: [BigQuery GROUP BY documentation](https://cloud.google.com/bigquery/docs/reference/standard-sql/query-syntax#group_by_clause)
+
+### Example
+
+```sql
+-- Invalid: col2 is not in GROUP BY and not in an aggregate function
+SELECT
+  col1,
+  col2,  -- Error: col2 must be in GROUP BY or aggregated
+  COUNT(*) as cnt
+FROM
+  my_table
+GROUP BY col1
+
+-- Invalid: Multiple violations
+SELECT
+  col1,
+  col2,  -- Error: not in GROUP BY
+  col3,  -- Error: not in GROUP BY
+  COUNT(*) as cnt
+FROM
+  my_table
+GROUP BY col1
+
+-- Invalid: Qualified column name not in GROUP BY
+SELECT
+  t.col1,
+  t.col2,  -- Error: t.col2 must be in GROUP BY or aggregated
+  COUNT(*) as cnt
+FROM
+  my_table t
+GROUP BY t.col1
+```
+
+### Valid use cases
+
+```sql
+-- Valid: All non-aggregated columns are in GROUP BY
+SELECT
+  col1,
+  COUNT(col2) as cnt,
+  SUM(col3) as total
+FROM
+  my_table
+GROUP BY col1
+
+-- Valid: Multiple columns in GROUP BY
+SELECT
+  col1,
+  col2,
+  MAX(col3) as max_val
+FROM
+  my_table
+GROUP BY col1, col2
+
+-- Valid: All aggregate functions are supported
+SELECT
+  user_id,
+  COUNT(*) as cnt,
+  AVG(amount) as avg_amount,
+  APPROX_COUNT_DISTINCT(product_id) as unique_products,
+  STDDEV(price) as price_stddev
+FROM
+  sales
+GROUP BY user_id
+
+-- Valid: Qualified column names
+SELECT
+  t1.user_id,
+  t2.category,
+  COUNT(*) as cnt
+FROM
+  users t1
+JOIN
+  orders t2
+ON
+  t1.id = t2.user_id
+GROUP BY t1.user_id, t2.category
+
+-- Valid: Query without GROUP BY
+SELECT
+  col1,
+  col2,
+  col3
+FROM
+  my_table
+```
