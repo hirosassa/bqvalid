@@ -170,7 +170,7 @@ FROM
 GROUP BY col1
 
 -- Invalid: Multiple violations
-[SELECT]
+SELECT
   col1,
   col2,  -- Error: not in GROUP BY
   col3,  -- Error: not in GROUP BY
