@@ -39,17 +39,13 @@ fn new_current_date_warning(row: usize, col: usize) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::helpers::parse_sql;
     use std::fs;
-    use tree_sitter::Parser as TsParser;
-    use tree_sitter_sql_bigquery::language;
 
     #[test]
     fn current_date_is_used() {
-        let mut parser = TsParser::new();
-        parser.set_language(&language()).unwrap();
-
         let sql = fs::read_to_string("./sql/current_date_is_used.sql").unwrap();
-        let tree = parser.parse(&sql, None).unwrap();
+        let tree = parse_sql(&sql);
 
         let mut ds = Vec::new();
         for node in traverse(tree.walk(), Order::Pre) {
@@ -62,11 +58,8 @@ mod tests {
 
     #[test]
     fn current_date_is_not_used() {
-        let mut parser = TsParser::new();
-        parser.set_language(&language()).unwrap();
-
         let sql = fs::read_to_string("./sql/sample.sql").unwrap();
-        let tree = parser.parse(&sql, None).unwrap();
+        let tree = parse_sql(&sql);
 
         let mut ds = Vec::new();
         for node in traverse(tree.walk(), Order::Pre) {

@@ -18,17 +18,20 @@ pub fn has_child_of_kind(node: &Node, kind: &str) -> bool {
         .any(|child| child.kind() == kind)
 }
 
+/// Parse SQL string into a tree-sitter tree (test helper)
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub fn parse_sql(sql: &str) -> tree_sitter::Tree {
     use tree_sitter::Parser as TsParser;
     use tree_sitter_sql_bigquery::language;
 
-    fn parse_sql(sql: &str) -> tree_sitter::Tree {
-        let mut parser = TsParser::new();
-        parser.set_language(&language()).unwrap();
-        parser.parse(sql, None).unwrap()
-    }
+    let mut parser = TsParser::new();
+    parser.set_language(&language()).unwrap();
+    parser.parse(sql, None).unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
 
     #[test]
     fn test_get_node_text() {

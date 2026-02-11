@@ -81,20 +81,16 @@ fn new_unnecessary_order_by_warning(order_by_node: &Node) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::helpers::parse_sql;
     use rstest::rstest;
     use std::fs;
-    use tree_sitter::Parser as TsParser;
-    use tree_sitter_sql_bigquery::language;
 
     #[rstest]
     #[case("./sql/unnecessary_order_by_in_cte.sql", 1)]
     #[case("./sql/unnecessary_order_by_in_subquery.sql", 1)]
     fn test_unnecessary_order_by_exists(#[case] sql_file: &str, #[case] expected_count: usize) {
-        let mut parser = TsParser::new();
-        parser.set_language(&language()).unwrap();
-
         let sql = fs::read_to_string(sql_file).unwrap();
-        let tree = parser.parse(&sql, None).unwrap();
+        let tree = parse_sql(&sql);
 
         let diagnostics = check(&tree, &sql);
         assert!(diagnostics.is_some());
@@ -103,11 +99,8 @@ mod tests {
 
     #[test]
     fn test_valid_order_by_with_limit() {
-        let mut parser = TsParser::new();
-        parser.set_language(&language()).unwrap();
-
         let sql = fs::read_to_string("./sql/valid_order_by_with_limit.sql").unwrap();
-        let tree = parser.parse(&sql, None).unwrap();
+        let tree = parse_sql(&sql);
 
         let diagnostics = check(&tree, &sql);
         assert!(diagnostics.is_none());
