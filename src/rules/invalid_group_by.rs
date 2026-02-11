@@ -3,6 +3,7 @@ use tree_sitter::{Node, Tree};
 use tree_sitter_traversal::{Order, traverse};
 
 use crate::diagnostic::Diagnostic;
+use crate::rules::helpers::{find_child_of_kind, get_node_text};
 
 pub fn check(tree: &Tree, sql: &str) -> Option<Vec<Diagnostic>> {
     let diagnostics = find_invalid_group_by(tree, sql);
@@ -49,10 +50,6 @@ fn check_select(node: &Node, sql: &str) -> Option<Vec<Diagnostic>> {
     }
 }
 
-fn find_child_of_kind<'a>(node: &'a Node<'a>, kind: &str) -> Option<Node<'a>> {
-    node.named_children(&mut node.walk())
-        .find(|child| child.kind() == kind)
-}
 
 fn extract_group_by_columns(select_node: &Node, sql: &str) -> Option<HashSet<String>> {
     let group_by_node = find_child_of_kind(select_node, "group_by_clause")?;
@@ -182,10 +179,6 @@ fn is_in_aggregate_function(node: &Node, sql: &str) -> bool {
     false
 }
 
-fn get_node_text(node: &Node, sql: &str) -> String {
-    let range = node.range();
-    sql[range.start_byte..range.end_byte].to_string()
-}
 
 #[cfg(test)]
 mod tests {
