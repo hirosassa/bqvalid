@@ -69,7 +69,6 @@ fn find_query_expr<'a>(node: &'a Node<'a>) -> Option<Node<'a>> {
         .find(|&child| child.kind() == "query_expr")
 }
 
-
 fn new_unnecessary_order_by_warning(order_by_node: &Node) -> Diagnostic {
     Diagnostic::new(
         order_by_node.start_position().row + 1,

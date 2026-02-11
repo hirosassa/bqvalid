@@ -50,7 +50,6 @@ fn check_select(node: &Node, sql: &str) -> Option<Vec<Diagnostic>> {
     }
 }
 
-
 fn extract_group_by_columns(select_node: &Node, sql: &str) -> Option<HashSet<String>> {
     let group_by_node = find_child_of_kind(select_node, "group_by_clause")?;
     let mut columns = HashSet::new();
@@ -178,7 +177,6 @@ fn is_in_aggregate_function(node: &Node, sql: &str) -> bool {
 
     false
 }
-
 
 #[cfg(test)]
 mod tests {
