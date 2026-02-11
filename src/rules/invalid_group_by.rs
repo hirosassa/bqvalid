@@ -75,7 +75,10 @@ fn check_select_expression(
 ) -> Option<Diagnostic> {
     // Check if this expression contains an identifier that's not in an aggregate function
     for node in traverse(expr_node.walk(), Order::Pre) {
-        if node.kind() == "identifier" && !is_alias(&node) && !is_in_aggregate_function(&node, sql)
+        if node.kind() == "identifier"
+            && !is_alias(&node)
+            && !is_function_name(&node)
+            && !is_in_aggregate_function(&node, sql)
         {
             let field_text = get_node_text(&node, sql);
 
@@ -106,31 +109,71 @@ fn is_alias(node: &Node) -> bool {
     false
 }
 
+fn is_function_name(node: &Node) -> bool {
+    // Check if this identifier is a function name
+    // Function names are direct children of function_call nodes with field name "function"
+    if let Some(parent) = node.parent()
+        && parent.kind() == "function_call"
+        && let Some(func_node) = parent.child_by_field_name("function")
+    {
+        return node.id() == func_node.id();
+    }
+    false
+}
+
 fn is_in_aggregate_function(node: &Node, sql: &str) -> bool {
     let mut current = node.parent();
 
     while let Some(parent) = current {
-        if parent.kind() == "function_call" {
-            // Get the function name from the 'function' field
-            if let Some(func_node) = parent.child_by_field_name("function") {
-                let func_name = get_node_text(&func_node, sql);
+        if parent.kind() == "function_call"
+            && let Some(func_node) = parent.child_by_field_name("function")
+        {
+            let func_name = get_node_text(&func_node, sql);
 
-                // Common aggregate functions in BigQuery (case-insensitive)
-                let func_name_upper = func_name.to_uppercase();
-                if matches!(
-                    func_name_upper.as_str(),
-                    "COUNT"
-                        | "SUM"
-                        | "AVG"
-                        | "MAX"
-                        | "MIN"
-                        | "ANY_VALUE"
-                        | "ARRAY_AGG"
-                        | "STRING_AGG"
-                        | "COUNTIF"
-                ) {
-                    return true;
-                }
+            // BigQuery aggregate functions (case-insensitive)
+            // Reference: https://cloud.google.com/bigquery/docs/reference/standard-sql/aggregate_functions
+            let func_name_upper = func_name.to_uppercase();
+            if matches!(
+                func_name_upper.as_str(),
+                // Standard aggregate functions
+                "ANY_VALUE"
+                    | "ARRAY_AGG"
+                    | "ARRAY_CONCAT_AGG"
+                    | "AVG"
+                    | "BIT_AND"
+                    | "BIT_OR"
+                    | "BIT_XOR"
+                    | "COUNT"
+                    | "COUNTIF"
+                    | "GROUPING"
+                    | "LOGICAL_AND"
+                    | "LOGICAL_OR"
+                    | "MAX"
+                    | "MAX_BY"
+                    | "MIN"
+                    | "MIN_BY"
+                    | "STRING_AGG"
+                    | "SUM"
+                    // Approximate aggregate functions
+                    | "APPROX_COUNT_DISTINCT"
+                    | "APPROX_QUANTILES"
+                    | "APPROX_TOP_COUNT"
+                    | "APPROX_TOP_SUM"
+                    // Statistical aggregate functions
+                    | "CORR"
+                    | "COVAR_POP"
+                    | "COVAR_SAMP"
+                    | "STDDEV"
+                    | "STDDEV_POP"
+                    | "STDDEV_SAMP"
+                    | "VAR_POP"
+                    | "VAR_SAMP"
+                    | "VARIANCE"
+                    // Geography aggregate functions
+                    | "ST_CENTROID_AGG"
+                    | "ST_UNION_AGG"
+            ) {
+                return true;
             }
         }
         current = parent.parent();
@@ -162,6 +205,8 @@ mod tests {
     #[case("invalid_group_by_column_not_in_clause.sql", 1)]
     #[case("invalid_group_by_multiple_violations.sql", 2)]
     #[case("invalid_group_by_in_subquery.sql", 1)]
+    #[case("invalid_group_by_qualified_column.sql", 1)]
+    #[case("invalid_group_by_mixed_qualified.sql", 1)]
     fn test_invalid_group_by(#[case] filename: &str, #[case] expected_count: usize) {
         let sql = fs::read_to_string(format!("./sql/{}", filename)).unwrap();
         let tree = parse_sql(&sql);
@@ -186,6 +231,9 @@ mod tests {
     #[rstest]
     #[case("valid_group_by_with_aggregates.sql")]
     #[case("valid_group_by_mixed_case_aggregates.sql")]
+    #[case("valid_group_by_all_aggregates.sql")]
+    #[case("valid_group_by_approx_functions.sql")]
+    #[case("valid_group_by_qualified_column.sql")]
     fn test_valid_group_by(#[case] filename: &str) {
         let sql = fs::read_to_string(format!("./sql/{}", filename)).unwrap();
         let tree = parse_sql(&sql);
@@ -213,6 +261,30 @@ mod tests {
                     assert!(
                         !is_alias(&node),
                         "col1 should not be recognized as an alias"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_is_function_name() {
+        let sql = "SELECT COUNT(col1) FROM table1";
+        let tree = parse_sql(sql);
+
+        // Check that function names are correctly identified
+        for node in traverse(tree.walk(), Order::Pre) {
+            if node.kind() == "identifier" {
+                let text = get_node_text(&node, sql);
+                if text == "COUNT" {
+                    assert!(
+                        is_function_name(&node),
+                        "COUNT should be recognized as a function name"
+                    );
+                } else if text == "col1" {
+                    assert!(
+                        !is_function_name(&node),
+                        "col1 should not be recognized as a function name"
                     );
                 }
             }
