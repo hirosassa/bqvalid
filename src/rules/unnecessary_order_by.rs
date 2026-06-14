@@ -7,16 +7,10 @@ use crate::rules::helpers::{find_child_of_kind, has_child_of_kind};
 pub fn check(tree: &Tree, sql: &str) -> Option<Vec<Diagnostic>> {
     let mut diagnostics = Vec::new();
 
-    let root = tree.root_node();
-
-    for cte_node in find_ctes(&root) {
-        if let Some(diagnostic) = check_unnecessary_order_by_in_scope(&cte_node, sql) {
-            diagnostics.push(diagnostic);
-        }
-    }
-
-    for subquery_node in find_subqueries(&root) {
-        if let Some(diagnostic) = check_unnecessary_order_by_in_scope(&subquery_node, sql) {
+    for node in traverse(tree.root_node().walk(), Order::Pre) {
+        if matches!(node.kind(), "cte" | "select_subexpression")
+            && let Some(diagnostic) = check_unnecessary_order_by_in_scope(&node, sql)
+        {
             diagnostics.push(diagnostic);
         }
     }
@@ -26,26 +20,6 @@ pub fn check(tree: &Tree, sql: &str) -> Option<Vec<Diagnostic>> {
     } else {
         Some(diagnostics)
     }
-}
-
-fn find_ctes<'a>(node: &'a Node<'a>) -> Vec<Node<'a>> {
-    let mut cte_nodes = Vec::new();
-    for n in traverse(node.walk(), Order::Pre) {
-        if n.kind() == "cte" {
-            cte_nodes.push(n);
-        }
-    }
-    cte_nodes
-}
-
-fn find_subqueries<'a>(node: &'a Node<'a>) -> Vec<Node<'a>> {
-    let mut subquery_nodes = Vec::new();
-    for n in traverse(node.walk(), Order::Pre) {
-        if n.kind() == "select_subexpression" {
-            subquery_nodes.push(n);
-        }
-    }
-    subquery_nodes
 }
 
 fn check_unnecessary_order_by_in_scope(scope_node: &Node, _sql: &str) -> Option<Diagnostic> {

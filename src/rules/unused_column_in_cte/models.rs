@@ -36,7 +36,7 @@ impl ColumnInfo {
 
 impl Display for ColumnInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let table_name = self.table_name.clone().unwrap_or_default();
+        let table_name = self.table_name.as_deref().unwrap_or_default();
         write!(
             f,
             "{}:{}:{}:{}",
