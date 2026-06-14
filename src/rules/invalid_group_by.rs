@@ -5,14 +5,8 @@ use tree_sitter_traversal::{Order, traverse};
 use crate::diagnostic::Diagnostic;
 use crate::rules::helpers::{find_child_of_kind, get_node_text};
 
-pub fn check(tree: &Tree, sql: &str) -> Option<Vec<Diagnostic>> {
-    let diagnostics = find_invalid_group_by(tree, sql);
-
-    if diagnostics.is_empty() {
-        None
-    } else {
-        Some(diagnostics)
-    }
+pub fn check(tree: &Tree, sql: &str) -> Vec<Diagnostic> {
+    find_invalid_group_by(tree, sql)
 }
 
 fn find_invalid_group_by(tree: &Tree, sql: &str) -> Vec<Diagnostic> {
@@ -195,13 +189,7 @@ mod tests {
         let sql = fs::read_to_string(format!("./sql/{}", filename)).unwrap();
         let tree = parse_sql(&sql);
 
-        let result = check(&tree, &sql);
-        assert!(
-            result.is_some(),
-            "Expected to detect invalid GROUP BY in {}",
-            filename
-        );
-        let diagnostics = result.unwrap();
+        let diagnostics = check(&tree, &sql);
         assert_eq!(
             diagnostics.len(),
             expected_count,
@@ -222,9 +210,9 @@ mod tests {
         let sql = fs::read_to_string(format!("./sql/{}", filename)).unwrap();
         let tree = parse_sql(&sql);
 
-        let result = check(&tree, &sql);
+        let diagnostics = check(&tree, &sql);
         assert!(
-            result.is_none(),
+            diagnostics.is_empty(),
             "Expected no diagnostics for valid GROUP BY in {}",
             filename
         );

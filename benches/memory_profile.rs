@@ -20,15 +20,12 @@ fn run_check(name: &str, path: &str) {
     let sql = fs::read_to_string(path).unwrap_or_else(|_| panic!("Failed to read {}", path));
 
     let tree = parse_sql(&sql);
-    let result = unused_column_in_cte::check(&tree, &sql);
+    let diagnostics = unused_column_in_cte::check(&tree, &sql);
 
-    match result {
-        Some(diagnostics) => {
-            println!("Found {} unused columns", diagnostics.len());
-        }
-        None => {
-            println!("No unused columns found");
-        }
+    if diagnostics.is_empty() {
+        println!("No unused columns found");
+    } else {
+        println!("Found {} unused columns", diagnostics.len());
     }
 }
 

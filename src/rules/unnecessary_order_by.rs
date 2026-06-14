@@ -4,7 +4,7 @@ use tree_sitter_traversal::{Order, traverse};
 use crate::diagnostic::Diagnostic;
 use crate::rules::helpers::{find_child_of_kind, has_child_of_kind};
 
-pub fn check(tree: &Tree, sql: &str) -> Option<Vec<Diagnostic>> {
+pub fn check(tree: &Tree, sql: &str) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
 
     for node in traverse(tree.root_node().walk(), Order::Pre) {
@@ -15,11 +15,7 @@ pub fn check(tree: &Tree, sql: &str) -> Option<Vec<Diagnostic>> {
         }
     }
 
-    if diagnostics.is_empty() {
-        None
-    } else {
-        Some(diagnostics)
-    }
+    diagnostics
 }
 
 fn check_unnecessary_order_by_in_scope(scope_node: &Node, _sql: &str) -> Option<Diagnostic> {
@@ -66,8 +62,7 @@ mod tests {
         let tree = parse_sql(&sql);
 
         let diagnostics = check(&tree, &sql);
-        assert!(diagnostics.is_some());
-        assert_eq!(diagnostics.unwrap().len(), expected_count);
+        assert_eq!(diagnostics.len(), expected_count);
     }
 
     #[test]
@@ -76,6 +71,6 @@ mod tests {
         let tree = parse_sql(&sql);
 
         let diagnostics = check(&tree, &sql);
-        assert!(diagnostics.is_none());
+        assert!(diagnostics.is_empty());
     }
 }

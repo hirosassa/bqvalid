@@ -45,14 +45,15 @@ fn main() -> ExitCode {
 
     // stdin
     if args.files.is_empty() {
-        let mut handle = stdin.lock();
-        if let Some(diagnostics) = analyse_sql(&mut handle) {
-            for diagnostic in diagnostics {
-                eprintln!("{}", diagnostic);
-            }
-            return ExitCode::FAILURE;
+        let diagnostics = analyse_sql(&mut stdin.lock());
+        for diagnostic in &diagnostics {
+            eprintln!("{}", diagnostic);
         }
-        return ExitCode::SUCCESS;
+        return if diagnostics.is_empty() {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        };
     }
 
     // files
@@ -65,24 +66,22 @@ fn main() -> ExitCode {
 
     let mut all_diagnostics = Vec::new();
 
-    #[allow(clippy::collapsible_if)]
     for target in targets {
         let file_path = target.into_path();
         if let Ok(mut file) = fs::File::open(&file_path) {
-            if let Some(diagnostics) = analyse_sql(&mut file) {
-                for diagnostic in diagnostics {
-                    eprintln!("{}: {}", file_path.display(), diagnostic);
-                    all_diagnostics.push(diagnostic);
-                }
+            let diagnostics = analyse_sql(&mut file);
+            for diagnostic in &diagnostics {
+                eprintln!("{}: {}", file_path.display(), diagnostic);
             }
+            all_diagnostics.extend(diagnostics);
         }
     }
 
-    if !all_diagnostics.is_empty() {
-        return ExitCode::FAILURE;
+    if all_diagnostics.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
     }
-
-    ExitCode::SUCCESS
 }
 
 fn is_sql(entry: &DirEntry) -> bool {
@@ -93,7 +92,7 @@ fn is_sql(entry: &DirEntry) -> bool {
         .unwrap_or(false)
 }
 
-fn analyse_sql<F: Read>(f: &mut F) -> Option<Vec<Diagnostic>> {
+fn analyse_sql<F: Read>(f: &mut F) -> Vec<Diagnostic> {
     let mut sql = String::new();
     let _ = f.read_to_string(&mut sql);
 
@@ -102,32 +101,12 @@ fn analyse_sql<F: Read>(f: &mut F) -> Option<Vec<Diagnostic>> {
     let tree = parser.parse(&sql, None).unwrap();
 
     let mut diagnostics = Vec::new();
-
-    if let Some(diags) = compare_table_suffix_with_subquery::check(&tree, &sql) {
-        diagnostics.extend(diags);
-    }
-
-    if let Some(diags) = invalid_group_by::check(&tree, &sql) {
-        diagnostics.extend(diags);
-    }
-
-    if let Some(diags) = unnecessary_order_by::check(&tree, &sql) {
-        diagnostics.extend(diags);
-    }
-
-    if let Some(diags) = unused_column_in_cte::check(&tree, &sql) {
-        diagnostics.extend(diags);
-    }
-
-    if let Some(diags) = use_current_date::check(&tree, &sql) {
-        diagnostics.extend(diags);
-    }
-
-    if diagnostics.is_empty() {
-        None
-    } else {
-        Some(diagnostics)
-    }
+    diagnostics.extend(compare_table_suffix_with_subquery::check(&tree, &sql));
+    diagnostics.extend(invalid_group_by::check(&tree, &sql));
+    diagnostics.extend(unnecessary_order_by::check(&tree, &sql));
+    diagnostics.extend(unused_column_in_cte::check(&tree, &sql));
+    diagnostics.extend(use_current_date::check(&tree, &sql));
+    diagnostics
 }
 
 #[cfg(test)]
@@ -170,13 +149,8 @@ mod tests {
         let tree = parser.parse(&sql, None).unwrap();
 
         let mut diagnostics = Vec::new();
-        if let Some(diags) = compare_table_suffix_with_subquery::check(&tree, &sql) {
-            diagnostics.extend(diags);
-        }
-
-        if let Some(diags) = use_current_date::check(&tree, &sql) {
-            diagnostics.extend(diags);
-        }
+        diagnostics.extend(compare_table_suffix_with_subquery::check(&tree, &sql));
+        diagnostics.extend(use_current_date::check(&tree, &sql));
         assert!(diagnostics.len() > 1);
     }
 }
