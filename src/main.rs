@@ -71,6 +71,7 @@ fn main() -> ExitCode {
     });
 
     let mut all_diagnostics = Vec::new();
+    let mut has_error = false;
 
     for target in targets {
         let file_path = target.into_path();
@@ -84,14 +85,15 @@ fn main() -> ExitCode {
             }
             Err(e) => {
                 eprintln!("{}: Error reading file: {}", file_path.display(), e);
+                has_error = true;
             }
         }
     }
 
-    if all_diagnostics.is_empty() {
-        ExitCode::SUCCESS
-    } else {
+    if has_error || !all_diagnostics.is_empty() {
         ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
     }
 }
 
