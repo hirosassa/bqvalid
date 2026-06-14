@@ -45,7 +45,13 @@ fn main() -> ExitCode {
 
     // stdin
     if args.files.is_empty() {
-        let diagnostics = analyse_sql(&mut stdin.lock());
+        let mut sql = String::new();
+        let read_result = stdin.lock().read_to_string(&mut sql);
+        if let Err(e) = read_result {
+            eprintln!("Error reading stdin: {}", e);
+            return ExitCode::FAILURE;
+        }
+        let diagnostics = analyse_sql(&sql);
         for diagnostic in &diagnostics {
             eprintln!("{}", diagnostic);
         }
@@ -68,12 +74,17 @@ fn main() -> ExitCode {
 
     for target in targets {
         let file_path = target.into_path();
-        if let Ok(mut file) = fs::File::open(&file_path) {
-            let diagnostics = analyse_sql(&mut file);
-            for diagnostic in &diagnostics {
-                eprintln!("{}: {}", file_path.display(), diagnostic);
+        match fs::read_to_string(&file_path) {
+            Ok(sql) => {
+                let diagnostics = analyse_sql(&sql);
+                for diagnostic in &diagnostics {
+                    eprintln!("{}: {}", file_path.display(), diagnostic);
+                }
+                all_diagnostics.extend(diagnostics);
             }
-            all_diagnostics.extend(diagnostics);
+            Err(e) => {
+                eprintln!("{}: Error reading file: {}", file_path.display(), e);
+            }
         }
     }
 
@@ -92,20 +103,17 @@ fn is_sql(entry: &DirEntry) -> bool {
         .unwrap_or(false)
 }
 
-fn analyse_sql<F: Read>(f: &mut F) -> Vec<Diagnostic> {
-    let mut sql = String::new();
-    let _ = f.read_to_string(&mut sql);
-
+fn analyse_sql(sql: &str) -> Vec<Diagnostic> {
     let mut parser = TsParser::new();
     parser.set_language(&language()).unwrap();
-    let tree = parser.parse(&sql, None).unwrap();
+    let tree = parser.parse(sql, None).unwrap();
 
     let mut diagnostics = Vec::new();
-    diagnostics.extend(compare_table_suffix_with_subquery::check(&tree, &sql));
-    diagnostics.extend(invalid_group_by::check(&tree, &sql));
-    diagnostics.extend(unnecessary_order_by::check(&tree, &sql));
-    diagnostics.extend(unused_column_in_cte::check(&tree, &sql));
-    diagnostics.extend(use_current_date::check(&tree, &sql));
+    diagnostics.extend(compare_table_suffix_with_subquery::check(&tree, sql));
+    diagnostics.extend(invalid_group_by::check(&tree, sql));
+    diagnostics.extend(unnecessary_order_by::check(&tree, sql));
+    diagnostics.extend(unused_column_in_cte::check(&tree, sql));
+    diagnostics.extend(use_current_date::check(&tree, sql));
     diagnostics
 }
 
