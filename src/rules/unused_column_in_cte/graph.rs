@@ -45,9 +45,12 @@ impl DependencyGraph {
 
     /// Check if a column is used in a specific CTE
     pub fn is_column_used(&self, table_name: &str, column_name: &str) -> bool {
-        self.nodes
-            .get(table_name)
-            .is_some_and(|node| node.used_column_names.contains(column_name))
+        self.nodes.get(table_name).is_some_and(|node| {
+            node.used_column_names.contains(column_name)
+                || node
+                    .used_column_names
+                    .contains(extract_column_name(column_name))
+        })
     }
 
     /// Collect all unused columns across all CTEs
@@ -141,6 +144,33 @@ mod tests {
 
         assert_eq!(unused.len(), 1);
         assert_eq!(unused[0].column_name, "col3");
+    }
+
+    #[test]
+    fn test_mark_column_used_with_qualified_name() {
+        let mut graph = DependencyGraph::new();
+
+        let columns = vec![
+            ColumnInfo::new(Some("cte1".to_string()), "col1".to_string(), None, 0, 0),
+            ColumnInfo::new(Some("cte1".to_string()), "col2".to_string(), None, 0, 5),
+        ];
+
+        graph.add_cte("cte1", &columns);
+
+        // Mark using qualified name "cte1.col1"
+        graph.mark_column_used("cte1", "cte1.col1");
+
+        // Should be found by both qualified and base name
+        assert!(graph.is_column_used("cte1", "cte1.col1"));
+        assert!(graph.is_column_used("cte1", "col1"));
+
+        // col2 should not be marked
+        assert!(!graph.is_column_used("cte1", "col2"));
+
+        // Only col2 should be unused
+        let unused = graph.collect_unused_columns();
+        assert_eq!(unused.len(), 1);
+        assert_eq!(unused[0].column_name, "col2");
     }
 
     #[test]
