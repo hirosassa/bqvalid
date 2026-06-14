@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use tree_sitter::Node;
 use tree_sitter_traversal::{Order, traverse};
 
-use crate::rules::helpers::get_node_text;
+use crate::rules::helpers::{get_node_text, is_function_name};
 
 use super::context::AnalysisContext;
 use super::models::ColumnInfo;
@@ -17,24 +17,6 @@ pub fn get_cte_name<'a>(cte_node: &Node, sql: &'a str) -> &'a str {
 /// e.g., "table.column" -> "column", "column" -> "column"
 pub fn extract_column_name(column_ref: &str) -> &str {
     column_ref.split('.').next_back().unwrap_or(column_ref)
-}
-
-/// Check if a node is a function name that should be skipped
-/// Returns true if the node is the name part of a function_call
-pub fn is_function_name(node: &Node) -> bool {
-    if let Some(parent) = node.parent()
-        && parent.kind() == "function_call"
-    {
-        // Check using field name (preferred method)
-        if let Some(func_node) = parent.child_by_field_name("function") {
-            return func_node.id() == node.id();
-        }
-        // Fallback: check if it's the first child
-        if let Some(first_child) = parent.child(0) {
-            return first_child.id() == node.id();
-        }
-    }
-    false
 }
 
 /// Extract table name from a potentially qualified table reference

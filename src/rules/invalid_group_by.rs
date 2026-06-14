@@ -3,7 +3,7 @@ use tree_sitter::{Node, Tree};
 use tree_sitter_traversal::{Order, traverse};
 
 use crate::diagnostic::Diagnostic;
-use crate::rules::helpers::{find_child_of_kind, get_node_text};
+use crate::rules::helpers::{find_child_of_kind, get_node_text, is_function_name};
 
 pub fn check(tree: &Tree, sql: &str) -> Vec<Diagnostic> {
     find_invalid_group_by(tree, sql)
@@ -95,18 +95,6 @@ fn is_alias(node: &Node) -> bool {
         && parent.kind() == "as_alias"
     {
         return true;
-    }
-    false
-}
-
-fn is_function_name(node: &Node) -> bool {
-    // Check if this identifier is a function name
-    // Function names are direct children of function_call nodes with field name "function"
-    if let Some(parent) = node.parent()
-        && parent.kind() == "function_call"
-        && let Some(func_node) = parent.child_by_field_name("function")
-    {
-        return node.id() == func_node.id();
     }
     false
 }
