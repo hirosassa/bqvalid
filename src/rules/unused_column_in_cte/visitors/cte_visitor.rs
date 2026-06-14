@@ -1,5 +1,6 @@
 use tree_sitter::Node;
 
+use crate::rules::helpers::get_node_text;
 use crate::rules::unused_column_in_cte::{
     context::AnalysisContext, models::ColumnInfo, utils, visitor::NodeVisitor,
 };
@@ -117,7 +118,7 @@ fn extract_column_name_without_alias(
     select_expr: &Node,
     sql: &str,
 ) -> (String, String, Option<String>) {
-    let expr = select_expr.utf8_text(sql.as_bytes()).unwrap().to_string();
+    let expr = get_node_text(select_expr, sql).to_string();
     let column_name = utils::extract_column_name(&expr).to_string();
     let source = if column_name != expr {
         Some(column_name.clone())
@@ -137,13 +138,13 @@ fn extract_alias_info(
     let alias_name = alias_node
         .named_children(&mut alias_node.walk())
         .last()
-        .map(|n| n.utf8_text(sql.as_bytes()).unwrap().to_string())
+        .map(|n| get_node_text(&n, sql).to_string())
         .unwrap_or_default();
 
     // Extract original column (first named child of select_expression)
     let original = select_expr
         .named_child(0)
-        .map(|n| n.utf8_text(sql.as_bytes()).unwrap().to_string())
+        .map(|n| get_node_text(&n, sql).to_string())
         .unwrap_or_else(|| alias_name.clone());
 
     // source_column is the base column name without table prefix

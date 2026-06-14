@@ -2,8 +2,7 @@ use tree_sitter::Node;
 
 /// Extract text content from a tree-sitter node
 pub fn get_node_text<'a>(node: &Node, sql: &'a str) -> &'a str {
-    let range = node.range();
-    &sql[range.start_byte..range.end_byte]
+    node.utf8_text(sql.as_bytes()).unwrap()
 }
 
 /// Find the first child node with the specified kind

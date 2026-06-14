@@ -2,16 +2,15 @@ use std::collections::HashMap;
 use tree_sitter::Node;
 use tree_sitter_traversal::{Order, traverse};
 
+use crate::rules::helpers::get_node_text;
+
 use super::context::AnalysisContext;
 use super::models::ColumnInfo;
 
 /// Extract CTE name from a CTE node
 pub fn get_cte_name<'a>(cte_node: &Node, sql: &'a str) -> &'a str {
-    cte_node
-        .child_by_field_name("alias_name")
-        .unwrap()
-        .utf8_text(sql.as_bytes())
-        .unwrap()
+    let alias_node = cte_node.child_by_field_name("alias_name").unwrap();
+    get_node_text(&alias_node, sql)
 }
 
 /// Extract column name from a potentially qualified column reference
@@ -55,15 +54,14 @@ pub fn extract_table(from: Option<Node>, sql: &str) -> (Vec<String>, HashMap<Str
                 && let Some(first_child) = n.named_child(0)
                 && first_child.kind() == "identifier"
             {
-                let table_name = first_child.utf8_text(sql.as_bytes()).unwrap().to_string();
+                let table_name = get_node_text(&first_child, sql).to_string();
                 tables.push(table_name.clone());
 
                 // Check if there's an alias
                 for child in n.children(&mut n.walk()) {
                     if child.kind() == "as_alias" {
                         if let Some(alias_node) = child.named_children(&mut child.walk()).last() {
-                            let alias_name =
-                                alias_node.utf8_text(sql.as_bytes()).unwrap().to_string();
+                            let alias_name = get_node_text(&alias_node, sql).to_string();
                             alias_map.insert(alias_name, table_name.clone());
                         }
                         break;
@@ -131,7 +129,7 @@ pub fn extract_and_mark_fields(
             return;
         }
 
-        let field_text = node.utf8_text(sql.as_bytes()).unwrap_or("");
+        let field_text = get_node_text(node, sql);
         let col_name = extract_column_name(field_text);
 
         // Find which table this column belongs to

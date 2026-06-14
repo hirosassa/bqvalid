@@ -2,6 +2,7 @@ use tree_sitter::{Node, Tree};
 use tree_sitter_traversal::{Order, traverse};
 
 use crate::diagnostic::Diagnostic;
+use crate::rules::helpers::get_node_text;
 
 pub fn check(tree: &Tree, sql: &str) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
@@ -16,13 +17,12 @@ pub fn check(tree: &Tree, sql: &str) -> Vec<Diagnostic> {
 }
 
 fn current_date_used(node: Node, src: &str) -> Option<Diagnostic> {
-    let range = node.range();
-    let text = &src[range.start_byte..range.end_byte];
+    let text = get_node_text(&node, src);
 
     if node.kind() == "identifier" && text.eq_ignore_ascii_case("current_date") {
         return Some(new_current_date_warning(
-            range.start_point.row,
-            range.start_point.column,
+            node.range().start_point.row,
+            node.range().start_point.column,
         ));
     }
     None

@@ -21,11 +21,7 @@ pub fn check(tree: &Tree, sql: &str) -> Vec<Diagnostic> {
 fn check_unnecessary_order_by_in_scope(scope_node: &Node, _sql: &str) -> Option<Diagnostic> {
     let query_expr = find_query_expr(scope_node)?;
 
-    let has_order_by = has_child_of_kind(&query_expr, "order_by_clause");
-    let has_limit = has_child_of_kind(&query_expr, "limit_clause");
-
-    if has_order_by
-        && !has_limit
+    if !has_child_of_kind(&query_expr, "limit_clause")
         && let Some(order_by_node) = find_child_of_kind(&query_expr, "order_by_clause")
     {
         return Some(new_unnecessary_order_by_warning(&order_by_node));

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use tree_sitter::Node;
 use tree_sitter_traversal::{Order, traverse};
 
+use crate::rules::helpers::get_node_text;
 use crate::rules::unused_column_in_cte::{
     context::AnalysisContext, models::ColumnInfo, utils, visitor::NodeVisitor,
 };
@@ -80,7 +81,7 @@ fn process_unnest_in_from(from_node: &Node, context: &mut AnalysisContext) {
             // Extract identifiers from UNNEST - these are the column references
             for unnest_child in traverse(child.walk(), Order::Pre) {
                 if unnest_child.kind() == "identifier" || unnest_child.kind() == "field" {
-                    let column_text = unnest_child.utf8_text(sql.as_bytes()).unwrap();
+                    let column_text = get_node_text(&unnest_child, sql);
 
                     // Resolve table name for this column
                     let table = if column_text.contains('.') {
@@ -140,7 +141,7 @@ fn extract_columns_from_condition(
                 continue;
             }
 
-            let column_text = child.utf8_text(sql.as_bytes()).unwrap().to_string();
+            let column_text = get_node_text(&child, sql).to_string();
 
             // Resolve table name for this column
             let table = if column_text.contains('.') {
