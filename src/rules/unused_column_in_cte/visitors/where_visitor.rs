@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use tree_sitter::Node;
 use tree_sitter_traversal::{Order, traverse};
 
-use crate::rules::helpers::get_node_text;
+use crate::rules::helpers::{find_parent_select, get_node_text, is_function_name};
 use crate::rules::unused_column_in_cte::{
     context::AnalysisContext, models::ColumnInfo, utils, visitor::NodeVisitor,
 };
@@ -52,17 +52,11 @@ fn process_condition_node(node: &Node, context: &mut AnalysisContext) {
 
 /// Extract tables from the parent SELECT node
 fn extract_tables_from_parent(node: &Node, sql: &str) -> (Vec<String>, HashMap<String, String>) {
-    let mut current = node.parent();
-    while let Some(parent) = current {
-        if parent.kind() == "select" {
-            // Find the from_clause child of this SELECT
-            for child in parent.named_children(&mut parent.walk()) {
-                if child.kind() == "from_clause" {
-                    return utils::extract_table(Some(child), sql);
-                }
-            }
-        }
-        current = parent.parent();
+    if let Some(select_node) = find_parent_select(node) {
+        let from_node = select_node
+            .named_children(&mut select_node.walk())
+            .find(|child| child.kind() == "from_clause");
+        return utils::extract_table(from_node, sql);
     }
     (Vec::new(), HashMap::new())
 }
@@ -137,7 +131,7 @@ fn extract_columns_from_condition(
     for child in traverse(node.walk(), Order::Pre) {
         if child.kind() == "field" || child.kind() == "identifier" {
             // Skip function names
-            if utils::is_function_name(&child) {
+            if is_function_name(&child) {
                 continue;
             }
 

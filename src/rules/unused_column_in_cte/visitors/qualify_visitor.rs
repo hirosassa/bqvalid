@@ -1,5 +1,6 @@
 use tree_sitter::Node;
 
+use crate::rules::helpers::find_parent_select;
 use crate::rules::unused_column_in_cte::{context::AnalysisContext, utils, visitor::NodeVisitor};
 
 /// Visitor for processing QUALIFY clauses
@@ -16,39 +17,18 @@ impl NodeVisitor for QualifyVisitor {
 
         let sql = context.sql();
 
-        // Get the FROM clause to know which tables are available
-        // We need to find the parent SELECT to get the FROM clause
-        let select_node = find_parent_select(node);
-        if select_node.is_none() {
+        let Some(select_node) = find_parent_select(node) else {
             return;
-        }
+        };
 
-        let select_node = select_node.unwrap();
-        let from_node = find_from_clause(&select_node);
+        let from_node = select_node
+            .named_children(&mut select_node.walk())
+            .find(|child| child.kind() == "from_clause");
         let (tables, alias_map) = utils::extract_table(from_node, sql);
 
         // Extract all field/identifier references from the QUALIFY clause
         utils::extract_and_mark_fields(node, sql, &tables, &alias_map, context);
     }
-}
-
-/// Find the parent SELECT node
-fn find_parent_select<'a>(node: &'a Node<'a>) -> Option<Node<'a>> {
-    let mut current = node.parent();
-    while let Some(parent) = current {
-        if parent.kind() == "select" {
-            return Some(parent);
-        }
-        current = parent.parent();
-    }
-    None
-}
-
-/// Find the FROM clause in a SELECT node
-fn find_from_clause<'a>(select_node: &'a Node<'a>) -> Option<Node<'a>> {
-    select_node
-        .named_children(&mut select_node.walk())
-        .find(|child| child.kind() == "from_clause")
 }
 
 #[cfg(test)]

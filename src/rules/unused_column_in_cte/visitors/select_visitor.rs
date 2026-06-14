@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use tree_sitter::Node;
 
-use crate::rules::helpers::get_node_text;
+use crate::rules::helpers::{get_node_text, is_function_name};
 use crate::rules::unused_column_in_cte::{
     context::AnalysisContext, models::ColumnInfo, utils, visitor::NodeVisitor,
 };
@@ -112,18 +112,12 @@ fn extract_field_references_from_expression(
 ) {
     // Process current node if it's a field or identifier
     if node.kind() == "field" || node.kind() == "identifier" {
-        let field_text = get_node_text(node, sql);
-        let col_name = utils::extract_column_name(field_text);
-
-        // Skip if this is a function name
-        if let Some(parent) = node.parent()
-            && parent.kind() == "function_call"
-            && let Some(name_node) = parent.child_by_field_name("name")
-            && name_node.id() == node.id()
-        {
-            // This is a function name, skip it
+        if is_function_name(node) {
             return;
         }
+
+        let field_text = get_node_text(node, sql);
+        let col_name = utils::extract_column_name(field_text);
 
         // Find which table this column belongs to
         let table = utils::find_original_table(field_text, tables, alias_map, &context.cte_columns);
@@ -227,18 +221,12 @@ fn extract_all_fields_into_vec(
     // Note: tree-sitter may use 'field' for qualified references (table.column)
     // and 'identifier' for simple column references
     if node.kind() == "field" || node.kind() == "identifier" {
-        let field_text = get_node_text(node, sql);
-        let col_name = utils::extract_column_name(field_text);
-
-        // Skip if this looks like a function name (parent is function_call with this as name)
-        if let Some(parent) = node.parent()
-            && parent.kind() == "function_call"
-            && let Some(name_node) = parent.child_by_field_name("name")
-            && name_node.id() == node.id()
-        {
-            // This is a function name, not a column reference
+        if is_function_name(node) {
             return;
         }
+
+        let field_text = get_node_text(node, sql);
+        let col_name = utils::extract_column_name(field_text);
 
         // Find which table this column belongs to
         let table = utils::find_original_table(field_text, tables, alias_map, cte_columns);

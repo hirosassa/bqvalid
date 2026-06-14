@@ -17,6 +17,33 @@ pub fn has_child_of_kind(node: &Node, kind: &str) -> bool {
         .any(|child| child.kind() == kind)
 }
 
+/// Find the nearest parent node with kind "select"
+pub fn find_parent_select<'a>(node: &'a Node<'a>) -> Option<Node<'a>> {
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        if parent.kind() == "select" {
+            return Some(parent);
+        }
+        current = parent.parent();
+    }
+    None
+}
+
+/// Check if a node is a function name (the name part of a function_call)
+pub fn is_function_name(node: &Node) -> bool {
+    if let Some(parent) = node.parent()
+        && parent.kind() == "function_call"
+    {
+        if let Some(func_node) = parent.child_by_field_name("function") {
+            return func_node.id() == node.id();
+        }
+        if let Some(first_child) = parent.child(0) {
+            return first_child.id() == node.id();
+        }
+    }
+    false
+}
+
 /// Parse SQL string into a tree-sitter tree (test helper)
 #[cfg(test)]
 pub fn parse_sql(sql: &str) -> tree_sitter::Tree {
