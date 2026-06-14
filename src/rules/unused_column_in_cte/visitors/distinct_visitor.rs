@@ -1,5 +1,6 @@
 use tree_sitter::Node;
 
+use crate::rules::helpers::get_node_text;
 use crate::rules::unused_column_in_cte::{context::AnalysisContext, visitor::NodeVisitor};
 
 /// Visitor for processing SELECT DISTINCT
@@ -17,10 +18,9 @@ impl NodeVisitor for DistinctVisitor {
         let sql = context.sql();
 
         // Check if this SELECT has DISTINCT
-        let has_distinct = node.children(&mut node.walk()).any(|child| {
-            let text = child.utf8_text(sql.as_bytes()).unwrap_or("");
-            text.eq_ignore_ascii_case("distinct")
-        });
+        let has_distinct = node
+            .children(&mut node.walk())
+            .any(|child| get_node_text(&child, sql).eq_ignore_ascii_case("distinct"));
 
         if !has_distinct {
             return;
@@ -33,7 +33,7 @@ impl NodeVisitor for DistinctVisitor {
                 // Get CTE name
                 let cte_name = parent
                     .child_by_field_name("alias_name")
-                    .and_then(|n| n.utf8_text(sql.as_bytes()).ok())
+                    .map(|n| get_node_text(&n, sql))
                     .unwrap_or("");
 
                 // Mark all columns in this CTE as used

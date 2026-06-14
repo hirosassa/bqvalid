@@ -2,6 +2,7 @@ use tree_sitter::{Node, Tree};
 use tree_sitter_traversal::{Order, traverse};
 
 use crate::diagnostic::Diagnostic;
+use crate::rules::helpers::get_node_text;
 
 pub fn check(tree: &Tree, sql: &str) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
@@ -22,8 +23,7 @@ pub fn check(tree: &Tree, sql: &str) -> Vec<Diagnostic> {
 
 fn compared_with_subquery_in_binary_expression(n: Node, src: &str) -> Option<Diagnostic> {
     for node in traverse(n.walk(), Order::Pre) {
-        let range = node.range();
-        let text = &src[range.start_byte..range.end_byte];
+        let text = get_node_text(&node, src);
 
         if node.kind() == "identifier" && text.eq_ignore_ascii_case("_table_suffix") {
             let parent = node.parent().unwrap();
@@ -45,8 +45,7 @@ fn compared_with_subquery_in_binary_expression(n: Node, src: &str) -> Option<Dia
 
 fn compared_with_subquery_in_between_expression(n: Node, src: &str) -> Option<Diagnostic> {
     for node in traverse(n.walk(), Order::Pre) {
-        let range = node.range();
-        let text = &src[range.start_byte..range.end_byte];
+        let text = get_node_text(&node, src);
 
         if node.kind() == "identifier" && text.eq_ignore_ascii_case("_table_suffix") {
             let parent = node.parent().unwrap();

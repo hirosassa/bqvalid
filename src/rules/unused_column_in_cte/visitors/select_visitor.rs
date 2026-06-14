@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use tree_sitter::Node;
 
+use crate::rules::helpers::get_node_text;
 use crate::rules::unused_column_in_cte::{
     context::AnalysisContext, models::ColumnInfo, utils, visitor::NodeVisitor,
 };
@@ -91,7 +92,7 @@ fn find_parent_cte_name(select_node: &Node, sql: &str) -> String {
         if parent.kind() == "cte" {
             return parent
                 .child_by_field_name("alias_name")
-                .and_then(|n| n.utf8_text(sql.as_bytes()).ok())
+                .map(|n| get_node_text(&n, sql))
                 .unwrap_or("")
                 .to_string();
         }
@@ -111,7 +112,7 @@ fn extract_field_references_from_expression(
 ) {
     // Process current node if it's a field or identifier
     if node.kind() == "field" || node.kind() == "identifier" {
-        let field_text = node.utf8_text(sql.as_bytes()).unwrap_or("");
+        let field_text = get_node_text(node, sql);
         let col_name = utils::extract_column_name(field_text);
 
         // Skip if this is a function name
@@ -162,7 +163,7 @@ fn extract_final_select_columns(
             if !has_direct_field {
                 // Fallback: treat the whole expression text as a column reference
                 // This handles cases where tree-sitter doesn't create a 'field' node
-                let column_text = child.utf8_text(sql.as_bytes()).unwrap();
+                let column_text = get_node_text(&child, sql);
                 let col_name = utils::extract_column_name(column_text);
 
                 let table = utils::find_original_table(
@@ -226,7 +227,7 @@ fn extract_all_fields_into_vec(
     // Note: tree-sitter may use 'field' for qualified references (table.column)
     // and 'identifier' for simple column references
     if node.kind() == "field" || node.kind() == "identifier" {
-        let field_text = node.utf8_text(sql.as_bytes()).unwrap_or("");
+        let field_text = get_node_text(node, sql);
         let col_name = utils::extract_column_name(field_text);
 
         // Skip if this looks like a function name (parent is function_call with this as name)
