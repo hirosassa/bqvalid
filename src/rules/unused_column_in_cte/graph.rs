@@ -36,6 +36,10 @@ impl DependencyGraph {
     pub fn mark_column_used(&mut self, table_name: &str, column_name: &str) {
         if let Some(node) = self.nodes.get_mut(table_name) {
             node.used_column_names.insert(column_name.to_string());
+            let base_name = extract_column_name(column_name);
+            if base_name != column_name {
+                node.used_column_names.insert(base_name.to_string());
+            }
         }
     }
 
@@ -54,10 +58,7 @@ impl DependencyGraph {
             for col in &cte_node.columns {
                 let col_base_name = extract_column_name(&col.column_name);
                 let is_used = cte_node.used_column_names.contains(&col.column_name)
-                    || cte_node
-                        .used_column_names
-                        .iter()
-                        .any(|used| extract_column_name(used) == col_base_name);
+                    || cte_node.used_column_names.contains(col_base_name);
 
                 if !is_used {
                     unused.push(col.clone());
