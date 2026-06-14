@@ -57,7 +57,7 @@ fn extract_group_by_columns(select_node: &Node, sql: &str) -> Option<HashSet<Str
     for node in traverse(group_by_node.walk(), Order::Pre) {
         if node.kind() == "identifier" {
             let text = get_node_text(&node, sql);
-            columns.insert(text);
+            columns.insert(text.to_string());
         }
     }
 
@@ -79,7 +79,7 @@ fn check_select_expression(
             let field_text = get_node_text(&node, sql);
 
             // Check if the identifier is in GROUP BY
-            if !group_by_columns.contains(&field_text) {
+            if !group_by_columns.contains(field_text) {
                 return Some(Diagnostic::new(
                     node.start_position().row + 1,
                     node.start_position().column + 1,
