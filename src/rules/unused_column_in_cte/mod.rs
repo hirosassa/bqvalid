@@ -17,7 +17,7 @@ use visitors::{
     CteVisitor, PivotVisitor, QualifyVisitor, SelectStarVisitor, SelectVisitor, WhereVisitor,
 };
 
-pub fn check(tree: &Tree, sql: &str) -> Option<Vec<Diagnostic>> {
+pub fn check(tree: &Tree, sql: &str) -> Vec<Diagnostic> {
     let mut context = AnalysisContext::new(sql);
 
     let cte_visitor = CteVisitor;
@@ -39,24 +39,17 @@ pub fn check(tree: &Tree, sql: &str) -> Option<Vec<Diagnostic>> {
         pivot_visitor.visit(&node, &mut context);
     }
 
-    let unused_columns = context.collect_unused();
-
-    if unused_columns.is_empty() {
-        None
-    } else {
-        Some(
-            unused_columns
-                .into_iter()
-                .map(|col| {
-                    Diagnostic::new(
-                        col.row,
-                        col.col,
-                        format!("Unused column: {}", col.column_name),
-                    )
-                })
-                .collect(),
-        )
-    }
+    context
+        .collect_unused()
+        .into_iter()
+        .map(|col| {
+            Diagnostic::new(
+                col.row,
+                col.col,
+                format!("Unused column: {}", col.column_name),
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -86,22 +79,21 @@ mod tests {
             fs::read_to_string(&sql_path).unwrap_or_else(|_| panic!("Failed to read {}", sql_path));
 
         let tree = parse_sql(&sql);
-        let result = check(&tree, &sql);
+        let diagnostics = check(&tree, &sql);
 
         if expected_unused.is_empty() {
             assert!(
-                result.is_none(),
+                diagnostics.is_empty(),
                 "{}: Expected no unused columns, but found some",
                 filename
             );
         } else {
             assert!(
-                result.is_some(),
+                !diagnostics.is_empty(),
                 "{}: Expected unused columns, but found none",
                 filename
             );
 
-            let diagnostics = result.unwrap();
             let mut found_columns: Vec<String> = diagnostics
                 .iter()
                 .map(|d| {
@@ -144,16 +136,16 @@ mod tests {
             fs::read_to_string(&sql_path).unwrap_or_else(|_| panic!("Failed to read {}", sql_path));
 
         let tree = parse_sql(&sql);
-        let result = check(&tree, &sql);
+        let diagnostics = check(&tree, &sql);
 
         assert!(
-            result.is_none(),
+            diagnostics.is_empty(),
             "{}: Expected no unused columns, but found: {:?}",
             filename,
-            result.map(|d| d
+            diagnostics
                 .iter()
                 .map(|diag| diag.message().to_string())
-                .collect::<Vec<_>>())
+                .collect::<Vec<_>>()
         );
     }
 }

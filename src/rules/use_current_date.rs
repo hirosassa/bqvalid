@@ -3,7 +3,7 @@ use tree_sitter_traversal::{Order, traverse};
 
 use crate::diagnostic::Diagnostic;
 
-pub fn check(tree: &Tree, sql: &str) -> Option<Vec<Diagnostic>> {
+pub fn check(tree: &Tree, sql: &str) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
 
     for node in traverse(tree.walk(), Order::Pre) {
@@ -12,11 +12,7 @@ pub fn check(tree: &Tree, sql: &str) -> Option<Vec<Diagnostic>> {
         }
     }
 
-    if diagnostics.is_empty() {
-        None
-    } else {
-        Some(diagnostics)
-    }
+    diagnostics
 }
 
 fn current_date_used(node: Node, src: &str) -> Option<Diagnostic> {
