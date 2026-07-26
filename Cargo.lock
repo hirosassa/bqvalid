@@ -146,6 +146,8 @@ dependencies = [
  "log",
  "rayon",
  "rstest",
+ "serde",
+ "serde_json",
  "tempfile",
  "tree-sitter",
  "tree-sitter-sql-bigquery",

@@ -45,6 +45,19 @@ one.sql:6:6: Full scan will cause! Should not compare _TABLE_SUFFIX with subquer
 three.sql:5:19: Full scan will cause! Should not compare _TABLE_SUFFIX with subquery
 ```
 
+### Output formats
+
+By default `bqvalid` prints the human-readable format shown above. Use `--format`
+to emit machine-readable output for CI and editor integrations:
+
+```shell
+bqvalid --format json sql/    # a single JSON document with a flat `diagnostics` array
+bqvalid --format sarif sql/   # SARIF 2.1.0, e.g. for GitHub code scanning
+```
+
+Lint diagnostics go to stdout; the tool's own errors (unreadable files, parse
+failures) go to stderr, so either format can be piped cleanly.
+
 ## Linting Rules
 
 See the [rules page](https://github.com/hirosassa/bqvalid/blob/main/docs/rules.md)
