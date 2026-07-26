@@ -9,7 +9,7 @@ mod visitors;
 use tree_sitter::Tree;
 use tree_sitter_traversal::{Order, traverse};
 
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rule::Rule;
 
 use context::AnalysisContext;
@@ -17,6 +17,8 @@ use visitor::NodeVisitor;
 use visitors::{
     CteVisitor, PivotVisitor, QualifyVisitor, SelectStarVisitor, SelectVisitor, WhereVisitor,
 };
+
+const RULE_ID: &str = "unused_column_in_cte";
 
 /// Flags columns defined in a CTE but never referenced afterwards.
 ///
@@ -27,7 +29,7 @@ pub struct UnusedColumnInCte;
 
 impl Rule for UnusedColumnInCte {
     fn id(&self) -> &'static str {
-        "unused_column_in_cte"
+        RULE_ID
     }
 
     fn check_tree(&self, tree: &Tree, sql: &str, diagnostics: &mut Vec<Diagnostic>) {
@@ -62,6 +64,8 @@ pub fn check(tree: &Tree, sql: &str) -> Vec<Diagnostic> {
         .into_iter()
         .map(|col| {
             Diagnostic::new(
+                RULE_ID,
+                Severity::Warning,
                 col.row,
                 col.col,
                 format!("Unused column: {}", col.column_name),

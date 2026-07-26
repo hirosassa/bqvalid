@@ -210,6 +210,7 @@ fn analyse_sql(parser: &mut TsParser, sql: &str) -> Vec<Diagnostic> {
 )]
 mod tests {
     use super::*;
+    use bqvalid::diagnostic::Severity;
     use std::fs::{self, File};
     use tempfile::tempdir;
 
@@ -352,8 +353,8 @@ mod tests {
     fn write_diagnostics_emits_each_diagnostic_to_the_writer() {
         // D5: lint results are the tool's normal output and must go to stdout.
         let diagnostics = vec![
-            Diagnostic::new(1, 1, "first".to_string()),
-            Diagnostic::new(2, 3, "second".to_string()),
+            Diagnostic::new("test_rule", Severity::Warning, 1, 1, "first".to_string()),
+            Diagnostic::new("test_rule", Severity::Warning, 2, 3, "second".to_string()),
         ];
         let mut out = Vec::new();
         write_diagnostics(&mut out, &diagnostics).unwrap();
@@ -371,7 +372,13 @@ mod tests {
         let results = vec![
             FileResult {
                 path: dir.path().join("good.sql"),
-                diagnostics: vec![Diagnostic::new(1, 8, "some warning".to_string())],
+                diagnostics: vec![Diagnostic::new(
+                    "test_rule",
+                    Severity::Warning,
+                    1,
+                    8,
+                    "some warning".to_string(),
+                )],
                 read_error: None,
             },
             FileResult {
