@@ -45,7 +45,10 @@ impl NodeVisitor for CteVisitor {
     }
 }
 
-/// Extract columns from a select_list node
+/// Extract columns from a select_list node.
+///
+/// Callers always pass the CTE's `select_list`, so this handles that node
+/// directly rather than recursing.
 fn extract_columns(
     node: &Node,
     sql: &str,
@@ -53,30 +56,22 @@ fn extract_columns(
 ) -> Vec<ColumnInfo> {
     let mut columns = Vec::new();
 
-    if node.kind() == "select_list" {
-        let from = node.next_named_sibling();
-        let (tables, alias_map) = utils::extract_table(from, sql);
-
-        for child in node.children(&mut node.walk()) {
-            if child.kind() == "select_expression" {
-                let column_info = extract_column_info_from_select_expression(
-                    &child,
-                    sql,
-                    &tables,
-                    &alias_map,
-                    cte_columns,
-                );
-                columns.push(column_info);
-            } else if child.kind() == "select_all" {
-                let position = child.start_position();
-                columns.extend(expand_asterisk(position, &tables, cte_columns));
-            }
-        }
+    if node.kind() != "select_list" {
         return columns;
     }
 
-    for child in node.named_children(&mut node.walk()) {
-        columns.extend(extract_columns(&child, sql, cte_columns));
+    let from = node.next_named_sibling();
+    let (tables, alias_map) = utils::extract_table(from, sql);
+    let resolver = utils::TableResolver::new(&tables, &alias_map, cte_columns);
+
+    for child in node.children(&mut node.walk()) {
+        if child.kind() == "select_expression" {
+            let column_info = extract_column_info_from_select_expression(&child, sql, &resolver);
+            columns.push(column_info);
+        } else if child.kind() == "select_all" {
+            let position = child.start_position();
+            columns.extend(expand_asterisk(position, &tables, cte_columns));
+        }
     }
 
     columns
@@ -86,9 +81,7 @@ fn extract_columns(
 fn extract_column_info_from_select_expression(
     select_expr: &Node,
     sql: &str,
-    tables: &[String],
-    alias_map: &std::collections::HashMap<String, String>,
-    cte_columns: &std::collections::HashMap<String, Vec<ColumnInfo>>,
+    resolver: &utils::TableResolver,
 ) -> ColumnInfo {
     // Check if there's an as_alias child
     let as_alias_node = select_expr
@@ -102,7 +95,7 @@ fn extract_column_info_from_select_expression(
     );
 
     // Resolve the table for this column
-    let table = utils::find_original_table(&original_column, tables, alias_map, cte_columns);
+    let table = resolver.resolve(&original_column);
 
     ColumnInfo::new(
         Some(table),

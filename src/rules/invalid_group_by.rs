@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::sync::LazyLock;
 use tree_sitter::Node;
 use tree_sitter_traversal::{Order, traverse};
 
@@ -7,6 +8,53 @@ use crate::rules::helpers::{find_child_of_kind, get_node_text, is_function_name,
 use crate::rules::rule::Rule;
 
 const RULE_ID: &str = "invalid_group_by";
+
+/// BigQuery aggregate functions (uppercase, matched case-insensitively).
+///
+/// Reference: <https://cloud.google.com/bigquery/docs/reference/standard-sql/aggregate_functions>
+static AGGREGATE_FUNCTIONS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    [
+        // Standard aggregate functions
+        "ANY_VALUE",
+        "ARRAY_AGG",
+        "ARRAY_CONCAT_AGG",
+        "AVG",
+        "BIT_AND",
+        "BIT_OR",
+        "BIT_XOR",
+        "COUNT",
+        "COUNTIF",
+        "GROUPING",
+        "LOGICAL_AND",
+        "LOGICAL_OR",
+        "MAX",
+        "MAX_BY",
+        "MIN",
+        "MIN_BY",
+        "STRING_AGG",
+        "SUM",
+        // Approximate aggregate functions
+        "APPROX_COUNT_DISTINCT",
+        "APPROX_QUANTILES",
+        "APPROX_TOP_COUNT",
+        "APPROX_TOP_SUM",
+        // Statistical aggregate functions
+        "CORR",
+        "COVAR_POP",
+        "COVAR_SAMP",
+        "STDDEV",
+        "STDDEV_POP",
+        "STDDEV_SAMP",
+        "VAR_POP",
+        "VAR_SAMP",
+        "VARIANCE",
+        // Geography aggregate functions
+        "ST_CENTROID_AGG",
+        "ST_UNION_AGG",
+    ]
+    .into_iter()
+    .collect()
+});
 
 /// Flags SELECT columns that are neither grouped nor aggregated, which BigQuery
 /// rejects at runtime.
@@ -114,49 +162,7 @@ fn is_in_aggregate_function(node: &Node, sql: &str) -> bool {
         {
             let func_name = get_node_text(&func_node, sql);
 
-            // BigQuery aggregate functions (case-insensitive)
-            // Reference: https://cloud.google.com/bigquery/docs/reference/standard-sql/aggregate_functions
-            let func_name_upper = func_name.to_uppercase();
-            if matches!(
-                func_name_upper.as_str(),
-                // Standard aggregate functions
-                "ANY_VALUE"
-                    | "ARRAY_AGG"
-                    | "ARRAY_CONCAT_AGG"
-                    | "AVG"
-                    | "BIT_AND"
-                    | "BIT_OR"
-                    | "BIT_XOR"
-                    | "COUNT"
-                    | "COUNTIF"
-                    | "GROUPING"
-                    | "LOGICAL_AND"
-                    | "LOGICAL_OR"
-                    | "MAX"
-                    | "MAX_BY"
-                    | "MIN"
-                    | "MIN_BY"
-                    | "STRING_AGG"
-                    | "SUM"
-                    // Approximate aggregate functions
-                    | "APPROX_COUNT_DISTINCT"
-                    | "APPROX_QUANTILES"
-                    | "APPROX_TOP_COUNT"
-                    | "APPROX_TOP_SUM"
-                    // Statistical aggregate functions
-                    | "CORR"
-                    | "COVAR_POP"
-                    | "COVAR_SAMP"
-                    | "STDDEV"
-                    | "STDDEV_POP"
-                    | "STDDEV_SAMP"
-                    | "VAR_POP"
-                    | "VAR_SAMP"
-                    | "VARIANCE"
-                    // Geography aggregate functions
-                    | "ST_CENTROID_AGG"
-                    | "ST_UNION_AGG"
-            ) {
+            if AGGREGATE_FUNCTIONS.contains(func_name.to_uppercase().as_str()) {
                 return true;
             }
         }

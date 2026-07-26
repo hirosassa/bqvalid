@@ -29,17 +29,11 @@ impl NodeVisitor for WhereVisitor {
 fn process_condition_node(node: &Node, context: &mut AnalysisContext) {
     let sql = context.sql();
     let (tables, alias_map) = extract_tables_from_parent(node, sql);
+    let resolver = utils::TableResolver::new(&tables, &alias_map, &context.cte_columns);
 
     // Extract all column references from the condition
     let mut col_refs = Vec::new();
-    extract_columns_from_condition(
-        node,
-        sql,
-        &tables,
-        &alias_map,
-        &context.cte_columns,
-        &mut col_refs,
-    );
+    extract_columns_from_condition(node, sql, &resolver, &mut col_refs);
 
     // Mark each column reference as used
     for col_ref in col_refs {
@@ -65,6 +59,7 @@ fn extract_tables_from_parent(node: &Node, sql: &str) -> (Vec<String>, HashMap<S
 fn process_unnest_in_from(from_node: &Node, context: &mut AnalysisContext) {
     let sql = context.sql();
     let (tables, alias_map) = utils::extract_table(Some(*from_node), sql);
+    let resolver = utils::TableResolver::new(&tables, &alias_map, &context.cte_columns);
 
     // Collect column references first
     let mut col_refs = Vec::new();
@@ -76,24 +71,7 @@ fn process_unnest_in_from(from_node: &Node, context: &mut AnalysisContext) {
             for unnest_child in traverse(child.walk(), Order::Pre) {
                 if unnest_child.kind() == "identifier" || unnest_child.kind() == "field" {
                     let column_text = get_node_text(&unnest_child, sql);
-
-                    // Resolve table name for this column
-                    let table = if column_text.contains('.') {
-                        // Qualified reference: table.column
-                        let prefix = column_text.split('.').next().unwrap_or("");
-                        alias_map
-                            .get(prefix)
-                            .cloned()
-                            .unwrap_or_else(|| prefix.to_string())
-                    } else {
-                        // Unqualified reference: find which table it belongs to
-                        utils::find_original_table(
-                            column_text,
-                            &tables,
-                            &alias_map,
-                            &context.cte_columns,
-                        )
-                    };
+                    let table = resolver.resolve_qualified_or(column_text);
 
                     if !table.is_empty() {
                         col_refs.push(ColumnInfo::new(
@@ -122,9 +100,7 @@ fn process_unnest_in_from(from_node: &Node, context: &mut AnalysisContext) {
 fn extract_columns_from_condition(
     node: &Node,
     sql: &str,
-    tables: &[String],
-    alias_map: &HashMap<String, String>,
-    cte_columns: &HashMap<String, Vec<ColumnInfo>>,
+    resolver: &utils::TableResolver,
     columns: &mut Vec<ColumnInfo>,
 ) {
     // Traverse the condition tree to find all column references
@@ -136,19 +112,7 @@ fn extract_columns_from_condition(
             }
 
             let column_text = get_node_text(&child, sql).to_string();
-
-            // Resolve table name for this column
-            let table = if column_text.contains('.') {
-                // Qualified reference: table.column
-                let prefix = column_text.split('.').next().unwrap_or("");
-                alias_map
-                    .get(prefix)
-                    .cloned()
-                    .unwrap_or_else(|| prefix.to_string())
-            } else {
-                // Unqualified reference: find which table it belongs to
-                utils::find_original_table(&column_text, tables, alias_map, cte_columns)
-            };
+            let table = resolver.resolve_qualified_or(&column_text);
 
             if !table.is_empty() {
                 columns.push(ColumnInfo::new(

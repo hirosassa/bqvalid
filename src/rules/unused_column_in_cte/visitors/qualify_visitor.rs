@@ -25,9 +25,10 @@ impl NodeVisitor for QualifyVisitor {
             .named_children(&mut select_node.walk())
             .find(|child| child.kind() == "from_clause");
         let (tables, alias_map) = utils::extract_table(from_node, sql);
+        let resolver = utils::TableResolver::new(&tables, &alias_map, &context.cte_columns);
 
         // Extract all field/identifier references from the QUALIFY clause
-        utils::extract_and_mark_fields(node, sql, &tables, &alias_map, context);
+        utils::extract_and_mark_fields(node, sql, &resolver, context);
     }
 }
 

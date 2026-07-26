@@ -75,12 +75,13 @@ fn extract_and_mark_expression_columns(
     // Get the FROM clause to know which tables are available
     let from = select_list.next_named_sibling();
     let (tables, alias_map) = utils::extract_table(from, sql);
+    let resolver = utils::TableResolver::new(&tables, &alias_map, &context.cte_columns);
 
     // Process each select_expression
     for child in select_list.children(&mut select_list.walk()) {
         if child.kind() == "select_expression" {
             // Extract all field references from the expression (including nested ones in function calls)
-            extract_field_references_from_expression(&child, sql, &tables, &alias_map, context);
+            extract_field_references_from_expression(&child, sql, &resolver, context);
         }
     }
 }
@@ -106,8 +107,7 @@ fn find_parent_cte_name(select_node: &Node, sql: &str) -> String {
 fn extract_field_references_from_expression(
     node: &Node,
     sql: &str,
-    tables: &[String],
-    alias_map: &std::collections::HashMap<String, String>,
+    resolver: &utils::TableResolver,
     context: &mut AnalysisContext,
 ) {
     // Process current node if it's a field or identifier
@@ -120,7 +120,7 @@ fn extract_field_references_from_expression(
         let col_name = utils::extract_column_name(field_text);
 
         // Find which table this column belongs to
-        let table = utils::find_original_table(field_text, tables, alias_map, &context.cte_columns);
+        let table = resolver.resolve(field_text);
 
         if !table.is_empty() {
             context.mark_used(&table, col_name);
@@ -129,7 +129,7 @@ fn extract_field_references_from_expression(
 
     // Recursively process children
     for child in node.children(&mut node.walk()) {
-        extract_field_references_from_expression(&child, sql, tables, alias_map, context);
+        extract_field_references_from_expression(&child, sql, resolver, context);
     }
 }
 
@@ -143,6 +143,7 @@ fn extract_final_select_columns(
     let mut columns = Vec::new();
     let from = select_list.next_named_sibling();
     let (tables, alias_map) = utils::extract_table(from, sql);
+    let resolver = utils::TableResolver::new(&tables, &alias_map, &context.cte_columns);
 
     for child in select_list.children(&mut select_list.walk()) {
         if child.kind() == "select_expression" {
@@ -160,12 +161,7 @@ fn extract_final_select_columns(
                 let column_text = get_node_text(&child, sql);
                 let col_name = utils::extract_column_name(column_text);
 
-                let table = utils::find_original_table(
-                    column_text,
-                    &tables,
-                    &alias_map,
-                    &context.cte_columns,
-                );
+                let table = resolver.resolve(column_text);
 
                 if !table.is_empty() {
                     columns.push(ColumnInfo::new(
@@ -179,14 +175,7 @@ fn extract_final_select_columns(
             }
 
             // Recurse to find any nested fields (after both branches)
-            extract_all_fields_into_vec(
-                &child,
-                sql,
-                &tables,
-                &alias_map,
-                &context.cte_columns,
-                &mut columns,
-            );
+            extract_all_fields_into_vec(&child, sql, &resolver, &mut columns);
         } else if child.kind() == "select_all" {
             // SELECT * - expand to all columns from referenced tables
             for table in &tables {
@@ -212,9 +201,7 @@ fn extract_final_select_columns(
 fn extract_all_fields_into_vec(
     node: &Node,
     sql: &str,
-    tables: &[String],
-    alias_map: &std::collections::HashMap<String, String>,
-    cte_columns: &std::collections::HashMap<String, Vec<ColumnInfo>>,
+    resolver: &utils::TableResolver,
     columns: &mut Vec<ColumnInfo>,
 ) {
     // Process current node if it's a field or identifier
@@ -229,7 +216,7 @@ fn extract_all_fields_into_vec(
         let col_name = utils::extract_column_name(field_text);
 
         // Find which table this column belongs to
-        let table = utils::find_original_table(field_text, tables, alias_map, cte_columns);
+        let table = resolver.resolve(field_text);
 
         if !table.is_empty() {
             columns.push(ColumnInfo::new(
@@ -244,7 +231,7 @@ fn extract_all_fields_into_vec(
 
     // Recursively process all children
     for child in node.children(&mut node.walk()) {
-        extract_all_fields_into_vec(&child, sql, tables, alias_map, cte_columns, columns);
+        extract_all_fields_into_vec(&child, sql, resolver, columns);
     }
 }
 
