@@ -1,4 +1,5 @@
 use bqvalid::diagnostic::Diagnostic;
+use bqvalid::output::{self, FileDiagnostics, OutputFormat};
 use bqvalid::rules::run_rules;
 use clap::Parser;
 use clap_verbosity_flag::Verbosity;
@@ -29,6 +30,10 @@ fn get_version() -> &'static str {
 struct Args {
     files: Vec<String>,
 
+    /// Output format for diagnostics.
+    #[clap(long, value_enum, default_value_t = OutputFormat::Plain)]
+    format: OutputFormat,
+
     #[clap(flatten)]
     verbose: Verbosity,
 }
@@ -53,7 +58,18 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         };
         let diagnostics = analyse_sql(&mut parser, &sql);
-        if let Err(e) = write_diagnostics(&mut io::stdout().lock(), &diagnostics) {
+        let mut out = io::stdout().lock();
+        let write_result = match args.format {
+            OutputFormat::Plain => write_diagnostics(&mut out, &diagnostics),
+            OutputFormat::Json | OutputFormat::Sarif => {
+                let files = [FileDiagnostics {
+                    path: "<stdin>",
+                    diagnostics: &diagnostics,
+                }];
+                emit_machine(&mut out, args.format, get_version(), &files)
+            }
+        };
+        if let Err(e) = write_result {
             eprintln!("Error writing diagnostics: {}", e);
             return ExitCode::FAILURE;
         }
@@ -85,7 +101,16 @@ fn main() -> ExitCode {
 
     let results = analyse_paths(targets);
 
-    match report(&results, &mut io::stdout().lock(), &mut io::stderr().lock()) {
+    let mut out = io::stdout().lock();
+    let mut err = io::stderr().lock();
+    let write_result = match args.format {
+        OutputFormat::Plain => report(&results, &mut out, &mut err),
+        OutputFormat::Json | OutputFormat::Sarif => {
+            report_machine(&results, args.format, get_version(), &mut out, &mut err)
+        }
+    };
+
+    match write_result {
         Ok(true) => ExitCode::FAILURE,
         Ok(false) => ExitCode::SUCCESS,
         Err(e) => {
@@ -93,6 +118,67 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Emit `files` in the given machine-readable `format` to `out`. `Plain` is a
+/// no-op here — callers route it through `write_diagnostics`/`report` instead.
+fn emit_machine<W: Write>(
+    out: &mut W,
+    format: OutputFormat,
+    version: &str,
+    files: &[FileDiagnostics],
+) -> io::Result<()> {
+    match format {
+        OutputFormat::Json => output::write_json(out, files),
+        OutputFormat::Sarif => output::write_sarif(out, files, version),
+        OutputFormat::Plain => Ok(()),
+    }
+}
+
+/// Render per-file results in a machine-readable format: the aggregated
+/// document goes to `out` (stdout), while the tool's own failures (unreadable
+/// files) still go to `err` (stderr). Returns `true` when any diagnostic or
+/// read error was seen, so the caller can pick the exit code.
+fn report_machine<O: Write, E: Write>(
+    results: &[FileResult],
+    format: OutputFormat,
+    version: &str,
+    out: &mut O,
+    err: &mut E,
+) -> io::Result<bool> {
+    let mut has_problem = false;
+    for result in results {
+        if let Some(read_error) = &result.read_error {
+            writeln!(
+                err,
+                "{}: Error reading file: {}",
+                result.path.display(),
+                read_error
+            )?;
+            has_problem = true;
+        }
+        if !result.diagnostics.is_empty() {
+            has_problem = true;
+        }
+    }
+
+    // `path.display()` yields a temporary, so materialize the path strings first
+    // and borrow them into the format views.
+    let paths: Vec<String> = results
+        .iter()
+        .map(|r| r.path.display().to_string())
+        .collect();
+    let views: Vec<FileDiagnostics> = results
+        .iter()
+        .zip(&paths)
+        .map(|(r, path)| FileDiagnostics {
+            path,
+            diagnostics: &r.diagnostics,
+        })
+        .collect();
+
+    emit_machine(out, format, version, &views)?;
+    Ok(has_problem)
 }
 
 /// Write lint diagnostics (the tool's normal output) to `out`. Used for the
@@ -456,5 +542,102 @@ where
         assert_eq!(results[0].path, missing);
         assert!(results[0].read_error.is_some());
         assert!(results[0].diagnostics.is_empty());
+    }
+
+    #[test]
+    fn report_machine_json_writes_document_to_stdout_and_read_errors_to_stderr() {
+        // A machine format aggregates diagnostics into a single JSON document on
+        // stdout; the tool's own read failure still goes to stderr so the two
+        // never mix on the same pipe.
+        let dir = tempdir().unwrap();
+        let results = vec![
+            FileResult {
+                path: dir.path().join("good.sql"),
+                diagnostics: vec![Diagnostic::new(
+                    "use_current_date",
+                    Severity::Warning,
+                    1,
+                    8,
+                    "some warning".to_string(),
+                )],
+                read_error: None,
+            },
+            FileResult {
+                path: dir.path().join("missing.sql"),
+                diagnostics: Vec::new(),
+                read_error: Some("no such file".to_string()),
+            },
+        ];
+
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let has_problem =
+            report_machine(&results, OutputFormat::Json, "1.2.3", &mut out, &mut err).unwrap();
+
+        assert!(has_problem);
+        let doc: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        let entries = doc["diagnostics"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["rule_id"], "use_current_date");
+        assert!(
+            entries[0]["path"].as_str().unwrap().ends_with("good.sql"),
+            "diagnostic must carry its file path"
+        );
+
+        let err = String::from_utf8(err).unwrap();
+        assert!(err.contains("Error reading file"));
+        assert!(
+            !err.contains("some warning"),
+            "diagnostics must not appear on stderr"
+        );
+    }
+
+    #[test]
+    fn report_machine_sarif_produces_a_2_1_0_run() {
+        let dir = tempdir().unwrap();
+        let results = vec![FileResult {
+            path: dir.path().join("a.sql"),
+            diagnostics: vec![Diagnostic::new(
+                "invalid_group_by",
+                Severity::Error,
+                5,
+                1,
+                "bad".to_string(),
+            )],
+            read_error: None,
+        }];
+
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let has_problem =
+            report_machine(&results, OutputFormat::Sarif, "1.2.3", &mut out, &mut err).unwrap();
+
+        assert!(has_problem);
+        let doc: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(doc["version"], "2.1.0");
+        let result = &doc["runs"][0]["results"][0];
+        assert_eq!(result["ruleId"], "invalid_group_by");
+        assert_eq!(result["level"], "error");
+    }
+
+    #[test]
+    fn report_machine_flags_no_problem_for_clean_results() {
+        let dir = tempdir().unwrap();
+        let results = vec![FileResult {
+            path: dir.path().join("clean.sql"),
+            diagnostics: Vec::new(),
+            read_error: None,
+        }];
+
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let has_problem =
+            report_machine(&results, OutputFormat::Json, "1.2.3", &mut out, &mut err).unwrap();
+
+        assert!(!has_problem);
+        // Still a well-formed document, just with no diagnostics.
+        let doc: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert!(doc["diagnostics"].as_array().unwrap().is_empty());
+        assert!(err.is_empty());
     }
 }
