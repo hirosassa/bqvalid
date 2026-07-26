@@ -1,15 +1,17 @@
 use tree_sitter::Node;
 
-use crate::diagnostic::Diagnostic;
-use crate::rules::helpers::get_node_text;
+use crate::diagnostic::{Diagnostic, Severity};
+use crate::rules::helpers::{get_node_text, one_based_start};
 use crate::rules::rule::Rule;
+
+const RULE_ID: &str = "use_current_date";
 
 /// Flags `CURRENT_DATE`, which hurts query reproducibility.
 pub struct UseCurrentDate;
 
 impl Rule for UseCurrentDate {
     fn id(&self) -> &'static str {
-        "use_current_date"
+        RULE_ID
     }
 
     fn check_node(&self, node: Node<'_>, sql: &str, diagnostics: &mut Vec<Diagnostic>) {
@@ -23,20 +25,16 @@ fn current_date_used(node: Node, src: &str) -> Option<Diagnostic> {
     let text = get_node_text(&node, src);
 
     if node.kind() == "identifier" && text.eq_ignore_ascii_case("current_date") {
-        return Some(new_current_date_warning(
-            node.range().start_point.row,
-            node.range().start_point.column,
+        let (row, col) = one_based_start(&node);
+        return Some(Diagnostic::new(
+            RULE_ID,
+            Severity::Warning,
+            row,
+            col,
+            "CURRENT_DATE is used!".to_string(),
         ));
     }
     None
-}
-
-fn new_current_date_warning(row: usize, col: usize) -> Diagnostic {
-    Diagnostic::new(
-        row.saturating_add(1),
-        col.saturating_add(1),
-        "CURRENT_DATE is used!".to_string(),
-    )
 }
 
 #[cfg(test)]

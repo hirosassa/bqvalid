@@ -1,16 +1,18 @@
 use tree_sitter::Node;
 use tree_sitter_traversal::{Order, traverse};
 
-use crate::diagnostic::Diagnostic;
-use crate::rules::helpers::get_node_text;
+use crate::diagnostic::{Diagnostic, Severity};
+use crate::rules::helpers::{get_node_text, one_based_start};
 use crate::rules::rule::Rule;
+
+const RULE_ID: &str = "compare_table_suffix_with_subquery";
 
 /// Flags `_TABLE_SUFFIX` compared against a subquery, which forces a full scan.
 pub struct CompareTableSuffixWithSubquery;
 
 impl Rule for CompareTableSuffixWithSubquery {
     fn id(&self) -> &'static str {
-        "compare_table_suffix_with_subquery"
+        RULE_ID
     }
 
     fn check_node(&self, node: Node<'_>, sql: &str, diagnostics: &mut Vec<Diagnostic>) {
@@ -40,11 +42,7 @@ fn compared_with_subquery_in_binary_expression(n: Node, src: &str) -> Option<Dia
             if parent.kind() == "binary_expression"
                 && right_operand.kind() == "select_subexpression"
             {
-                let rg = right_operand.range();
-                return Some(new_full_scan_warning(
-                    rg.start_point.row,
-                    rg.start_point.column,
-                ));
+                return Some(new_full_scan_warning(&right_operand));
             }
         }
     }
@@ -68,11 +66,7 @@ fn compared_with_subquery_in_between_expression(n: Node, src: &str) -> Option<Di
                     if (c.kind() == "between_from" || c.kind() == "between_to")
                         && first_child.kind() == "select_subexpression"
                     {
-                        let rg = first_child.range();
-                        return Some(new_full_scan_warning(
-                            rg.start_point.row,
-                            rg.start_point.column,
-                        ));
+                        return Some(new_full_scan_warning(&first_child));
                     }
                 }
             }
@@ -81,10 +75,15 @@ fn compared_with_subquery_in_between_expression(n: Node, src: &str) -> Option<Di
     None
 }
 
-fn new_full_scan_warning(row: usize, col: usize) -> Diagnostic {
+/// Build the full-scan diagnostic pointing at `subquery_node`. Both the binary
+/// and BETWEEN paths report the same problem, so construction lives here.
+fn new_full_scan_warning(subquery_node: &Node) -> Diagnostic {
+    let (row, col) = one_based_start(subquery_node);
     Diagnostic::new(
-        row.saturating_add(1),
-        col.saturating_add(1),
+        RULE_ID,
+        Severity::Warning,
+        row,
+        col,
         "Full scan will cause! Should not compare _TABLE_SUFFIX with subquery".to_string(),
     )
 }

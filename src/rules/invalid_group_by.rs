@@ -2,9 +2,11 @@ use std::collections::HashSet;
 use tree_sitter::Node;
 use tree_sitter_traversal::{Order, traverse};
 
-use crate::diagnostic::Diagnostic;
-use crate::rules::helpers::{find_child_of_kind, get_node_text, is_function_name};
+use crate::diagnostic::{Diagnostic, Severity};
+use crate::rules::helpers::{find_child_of_kind, get_node_text, is_function_name, one_based_start};
 use crate::rules::rule::Rule;
+
+const RULE_ID: &str = "invalid_group_by";
 
 /// Flags SELECT columns that are neither grouped nor aggregated, which BigQuery
 /// rejects at runtime.
@@ -12,7 +14,7 @@ pub struct InvalidGroupBy;
 
 impl Rule for InvalidGroupBy {
     fn id(&self) -> &'static str {
-        "invalid_group_by"
+        RULE_ID
     }
 
     fn check_node(&self, node: Node<'_>, sql: &str, diagnostics: &mut Vec<Diagnostic>) {
@@ -75,9 +77,12 @@ fn check_select_expression(
 
             // Check if the identifier is in GROUP BY
             if !group_by_columns.contains(field_text) {
+                let (row, col) = one_based_start(&node);
                 return Some(Diagnostic::new(
-                    node.start_position().row.saturating_add(1),
-                    node.start_position().column.saturating_add(1),
+                    RULE_ID,
+                    Severity::Error,
+                    row,
+                    col,
                     format!(
                         "Column '{}' must appear in the GROUP BY clause or be used in an aggregate function",
                         field_text

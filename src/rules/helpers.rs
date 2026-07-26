@@ -10,6 +10,15 @@ pub fn get_node_text<'a>(node: &Node, sql: &'a str) -> &'a str {
     node.utf8_text(sql.as_bytes()).unwrap_or_default()
 }
 
+/// 1-based (row, col) of a node's start position.
+///
+/// tree-sitter reports positions as 0-based; diagnostics report them as 1-based.
+/// This centralizes that `+1` conversion so rules don't each repeat it.
+pub fn one_based_start(node: &Node) -> (usize, usize) {
+    let point = node.start_position();
+    (point.row.saturating_add(1), point.column.saturating_add(1))
+}
+
 /// Find the first child node with the specified kind
 pub fn find_child_of_kind<'a>(node: &'a Node<'a>, kind: &str) -> Option<Node<'a>> {
     node.named_children(&mut node.walk())
@@ -95,6 +104,25 @@ mod tests {
             }
         }
         assert!(found, "Should find at least one identifier");
+    }
+
+    #[test]
+    fn one_based_start_converts_zero_based_position() {
+        // The single identifier starts at row 0, col 7 (0-based) in tree-sitter;
+        // one_based_start must report it as (1, 8).
+        let sql = "SELECT col1 FROM t";
+        let tree = parse_sql(sql);
+
+        use tree_sitter_traversal::{Order, traverse};
+        let mut checked = false;
+        for node in traverse(tree.walk(), Order::Pre) {
+            if node.kind() == "identifier" && get_node_text(&node, sql) == "col1" {
+                assert_eq!(one_based_start(&node), (1, 8));
+                checked = true;
+                break;
+            }
+        }
+        assert!(checked, "expected to find the col1 identifier");
     }
 
     #[test]
