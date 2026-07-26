@@ -26,9 +26,13 @@ fn compared_with_subquery_in_binary_expression(n: Node, src: &str) -> Option<Dia
         let text = get_node_text(&node, src);
 
         if node.kind() == "identifier" && text.eq_ignore_ascii_case("_table_suffix") {
-            let parent = node.parent().unwrap();
+            let Some(parent) = node.parent() else {
+                continue;
+            };
             let mut tc = parent.walk();
-            let right_operand = parent.children(&mut tc).last().unwrap();
+            let Some(right_operand) = parent.children(&mut tc).last() else {
+                continue;
+            };
             if parent.kind() == "binary_expression"
                 && right_operand.kind() == "select_subexpression"
             {
@@ -48,14 +52,19 @@ fn compared_with_subquery_in_between_expression(n: Node, src: &str) -> Option<Di
         let text = get_node_text(&node, src);
 
         if node.kind() == "identifier" && text.eq_ignore_ascii_case("_table_suffix") {
-            let parent = node.parent().unwrap();
+            let Some(parent) = node.parent() else {
+                continue;
+            };
             if parent.kind() == "between_operator" {
                 let mut tc = parent.walk();
                 for c in parent.children(&mut tc) {
+                    let Some(first_child) = c.child(0) else {
+                        continue;
+                    };
                     if (c.kind() == "between_from" || c.kind() == "between_to")
-                        && c.child(0).unwrap().kind() == "select_subexpression"
+                        && first_child.kind() == "select_subexpression"
                     {
-                        let rg = c.child(0).unwrap().range();
+                        let rg = first_child.range();
                         return Some(new_full_scan_warning(
                             rg.start_point.row,
                             rg.start_point.column,
@@ -70,13 +79,21 @@ fn compared_with_subquery_in_between_expression(n: Node, src: &str) -> Option<Di
 
 fn new_full_scan_warning(row: usize, col: usize) -> Diagnostic {
     Diagnostic::new(
-        row + 1,
-        col + 1,
+        row.saturating_add(1),
+        col.saturating_add(1),
         "Full scan will cause! Should not compare _TABLE_SUFFIX with subquery".to_string(),
     )
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
     use crate::rules::helpers::parse_sql;
@@ -127,6 +144,45 @@ mod tests {
         for node in traverse(tree.walk(), Order::Pre) {
             if node.kind() == "where_clause" {
                 assert!(compared_with_subquery_in_between_expression(node, &sql).is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn binary_op_points_at_the_subquery_position() {
+        // The diagnostic must point at the offending subquery, not the WHERE
+        // clause. On this single-line query the subquery starts at the '('.
+        let sql = "SELECT x FROM t WHERE _TABLE_SUFFIX = (SELECT MAX(s) FROM u)";
+        let paren_col = sql.find('(').expect("query contains a subquery paren");
+        let tree = parse_sql(sql);
+
+        let mut checked = false;
+        for node in traverse(tree.walk(), Order::Pre) {
+            if node.kind() == "where_clause" {
+                let diagnostic = compared_with_subquery_in_binary_expression(node, sql)
+                    .expect("subquery comparison should be flagged");
+                // 1-based, and row 1 because the query is on a single line.
+                assert_eq!(diagnostic.row(), 1);
+                assert_eq!(diagnostic.col(), paren_col + 1);
+                checked = true;
+            }
+        }
+        assert!(checked, "a where_clause node should exist");
+    }
+
+    #[test]
+    fn does_not_panic_on_malformed_where_clause() {
+        // Truncated / malformed input must not panic the node-navigation logic.
+        for sql in [
+            "SELECT x FROM t WHERE _TABLE_SUFFIX",
+            "WHERE _TABLE_SUFFIX = (",
+        ] {
+            let tree = parse_sql(sql);
+            for node in traverse(tree.walk(), Order::Pre) {
+                if node.kind() == "where_clause" {
+                    let _ = compared_with_subquery_in_binary_expression(node, sql);
+                    let _ = compared_with_subquery_in_between_expression(node, sql);
+                }
             }
         }
     }

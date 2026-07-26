@@ -29,10 +29,22 @@ fn current_date_used(node: Node, src: &str) -> Option<Diagnostic> {
 }
 
 fn new_current_date_warning(row: usize, col: usize) -> Diagnostic {
-    Diagnostic::new(row + 1, col + 1, "CURRENT_DATE is used!".to_string())
+    Diagnostic::new(
+        row.saturating_add(1),
+        col.saturating_add(1),
+        "CURRENT_DATE is used!".to_string(),
+    )
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
     use crate::rules::helpers::parse_sql;
@@ -64,5 +76,37 @@ mod tests {
             }
         }
         assert!(ds.is_empty());
+    }
+
+    #[test]
+    fn check_flags_every_occurrence() {
+        // Two calls on one line -> two diagnostics, each pointing at its own column.
+        let sql = "SELECT CURRENT_DATE(), CURRENT_DATE() FROM t";
+        let tree = parse_sql(sql);
+
+        let diagnostics = check(&tree, sql);
+        assert_eq!(diagnostics.len(), 2);
+        assert!(diagnostics.iter().all(|d| d.row() == 1));
+
+        let expected_cols: Vec<usize> = sql
+            .match_indices("CURRENT_DATE")
+            .map(|(i, _)| i + 1)
+            .collect();
+        assert_eq!(expected_cols.len(), 2);
+        let cols: Vec<usize> = diagnostics.iter().map(Diagnostic::col).collect();
+        for expected in expected_cols {
+            assert!(
+                cols.contains(&expected),
+                "missing diagnostic at col {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn check_is_case_insensitive() {
+        // Lowercase spelling must be flagged just like the canonical uppercase.
+        let sql = "SELECT current_date() FROM t";
+        let tree = parse_sql(sql);
+        assert_eq!(check(&tree, sql).len(), 1);
     }
 }

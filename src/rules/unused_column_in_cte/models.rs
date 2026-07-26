@@ -16,7 +16,10 @@ impl ColumnInfo {
     // Note: While this function could technically be declared as `const fn`,
     // it cannot be called in const contexts because it takes `String` parameters
     // which require non-const operations like `to_string()` to construct.
-    #[allow(clippy::missing_const_for_fn)]
+    #[allow(
+        clippy::missing_const_for_fn,
+        reason = "takes String params requiring non-const construction; cannot be const-called"
+    )]
     pub fn new(
         table_name: Option<String>,
         column_name: String,
@@ -28,8 +31,8 @@ impl ColumnInfo {
             table_name,
             column_name,
             original_column_name,
-            row: row + 1,
-            col: col + 1,
+            row: row.saturating_add(1),
+            col: col.saturating_add(1),
         }
     }
 }
@@ -58,6 +61,14 @@ impl Ord for ColumnInfo {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
 
