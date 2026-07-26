@@ -61,43 +61,119 @@ pub fn extract_table(from: Option<Node>, sql: &str) -> (Vec<String>, HashMap<Str
     (tables, alias_map)
 }
 
-/// Find the original table that a column belongs to
-pub fn find_original_table(
-    column: &str,
-    tables: &[String],
-    alias_map: &HashMap<String, String>,
-    cte_columns: &HashMap<String, Vec<ColumnInfo>>,
-) -> String {
-    // If column is qualified (e.g., "table1.column"), extract table name
-    if column.contains('.') {
-        let table_name = column.split('.').next().unwrap_or("");
-        // Check if this is an alias, and resolve it to the actual table name
-        let actual_table_name = alias_map
-            .get(table_name)
-            .map(|s| s.as_str())
-            .unwrap_or(table_name);
-        if tables.contains(&actual_table_name.to_string())
-            || cte_columns.contains_key(actual_table_name)
-        {
-            return actual_table_name.to_string();
+/// Resolves column references to their owning table within a single query scope
+/// (one FROM clause).
+///
+/// The unqualified-column lookup that [`find_original_table`] performs is
+/// `O(tables × columns_per_table)` per call, and each scope resolves many
+/// columns. `TableResolver` precomputes that mapping once so subsequent lookups
+/// are `O(1)`, while reproducing the exact resolution order of the original
+/// scan:
+/// - tables are considered in FROM order;
+/// - a table that is not a known CTE has unknown columns and therefore acts as
+///   a wildcard that claims any column, short-circuiting every table after it;
+/// - among CTEs preceding that wildcard, the first to expose a column wins.
+pub struct TableResolver<'a> {
+    tables: &'a [String],
+    alias_map: &'a HashMap<String, String>,
+    // Derived from `cte_columns`, but owned so the resolver only borrows the
+    // (context-independent) FROM-clause data and can coexist with a mutable
+    // borrow of the analysis context at the call sites.
+    is_cte: std::collections::HashSet<String>,
+    /// base column name -> owning table, for CTEs before the first wildcard.
+    unqualified: HashMap<String, &'a str>,
+    /// first non-CTE table in FROM order, if any; claims otherwise-unmatched columns.
+    wildcard: Option<&'a str>,
+}
+
+impl<'a> TableResolver<'a> {
+    pub fn new(
+        tables: &'a [String],
+        alias_map: &'a HashMap<String, String>,
+        cte_columns: &HashMap<String, Vec<ColumnInfo>>,
+    ) -> Self {
+        let mut is_cte = std::collections::HashSet::new();
+        let mut unqualified: HashMap<String, &str> = HashMap::new();
+        let mut wildcard = None;
+
+        for key in cte_columns.keys() {
+            is_cte.insert(key.clone());
+        }
+
+        for table in tables {
+            match cte_columns.get(table) {
+                Some(columns) => {
+                    for column_info in columns {
+                        let base = extract_column_name(&column_info.column_name);
+                        // First table in FROM order wins on a collision.
+                        unqualified
+                            .entry(base.to_string())
+                            .or_insert(table.as_str());
+                    }
+                }
+                None => {
+                    // Unknown columns: this table claims everything not already
+                    // matched, and shadows all following tables.
+                    wildcard = Some(table.as_str());
+                    break;
+                }
+            }
+        }
+
+        Self {
+            tables,
+            alias_map,
+            is_cte,
+            unqualified,
+            wildcard,
         }
     }
 
-    // For unqualified columns, find by exact column name match
-    let column_base_name = extract_column_name(column);
-    for table in tables {
-        if let Some(columns) = cte_columns.get(table) {
-            for column_info in columns {
-                let col_base_name = extract_column_name(&column_info.column_name);
-                if col_base_name == column_base_name {
-                    return table.clone();
-                }
+    /// Find the original table that a column belongs to, or `""` if none.
+    pub fn resolve(&self, column: &str) -> String {
+        // If column is qualified (e.g., "table1.column"), try the table prefix.
+        if column.contains('.') {
+            let table_name = column.split('.').next().unwrap_or("");
+            // Resolve aliases to the actual table name.
+            let actual_table_name = self
+                .alias_map
+                .get(table_name)
+                .map(|s| s.as_str())
+                .unwrap_or(table_name);
+            if self.tables.iter().any(|t| t == actual_table_name)
+                || self.is_cte.contains(actual_table_name)
+            {
+                return actual_table_name.to_string();
             }
-        } else {
-            return table.clone();
         }
+
+        // For unqualified columns (or qualified ones with an unknown prefix),
+        // match by the trailing column name.
+        let base = extract_column_name(column);
+        if let Some(table) = self.unqualified.get(base) {
+            return (*table).to_string();
+        }
+        if let Some(wildcard) = self.wildcard {
+            return wildcard.to_string();
+        }
+        String::new()
     }
-    String::new()
+
+    /// Resolve using the more permissive rule that WHERE / JOIN / UNNEST column
+    /// references use: a qualified prefix is always taken (alias-resolved),
+    /// even when it names neither a known table nor a CTE. Unqualified columns
+    /// fall back to [`resolve`](Self::resolve).
+    pub fn resolve_qualified_or(&self, column: &str) -> String {
+        if column.contains('.') {
+            let prefix = column.split('.').next().unwrap_or("");
+            return self
+                .alias_map
+                .get(prefix)
+                .cloned()
+                .unwrap_or_else(|| prefix.to_string());
+        }
+        self.resolve(column)
+    }
 }
 
 /// Recursively extract all field/identifier references and mark them as used
@@ -105,8 +181,7 @@ pub fn find_original_table(
 pub fn extract_and_mark_fields(
     node: &Node,
     sql: &str,
-    tables: &[String],
-    alias_map: &HashMap<String, String>,
+    resolver: &TableResolver,
     context: &mut AnalysisContext,
 ) {
     // Process current node if it's a field, identifier, or input_column
@@ -120,7 +195,7 @@ pub fn extract_and_mark_fields(
         let col_name = extract_column_name(field_text);
 
         // Find which table this column belongs to
-        let table = find_original_table(field_text, tables, alias_map, &context.cte_columns);
+        let table = resolver.resolve(field_text);
 
         if !table.is_empty() {
             context.mark_used(&table, col_name);
@@ -129,7 +204,7 @@ pub fn extract_and_mark_fields(
 
     // Recursively process children
     for child in node.children(&mut node.walk()) {
-        extract_and_mark_fields(&child, sql, tables, alias_map, context);
+        extract_and_mark_fields(&child, sql, resolver, context);
     }
 }
 
@@ -145,6 +220,16 @@ pub fn extract_and_mark_fields(
 mod tests {
     use super::*;
     use crate::rules::helpers::parse_sql;
+
+    /// Test helper: resolve a single column via a one-shot [`TableResolver`].
+    fn find_original_table(
+        column: &str,
+        tables: &[String],
+        alias_map: &HashMap<String, String>,
+        cte_columns: &HashMap<String, Vec<ColumnInfo>>,
+    ) -> String {
+        TableResolver::new(tables, alias_map, cte_columns).resolve(column)
+    }
 
     #[test]
     fn test_extract_column_name() {
@@ -210,6 +295,101 @@ mod tests {
         assert_eq!(
             find_original_table("z.x", &tables, &alias_map, &cte_columns),
             ""
+        );
+    }
+
+    // The following tests lock the order-dependent quirks of resolution so the
+    // memoized implementation stays behaviourally identical.
+
+    #[test]
+    fn find_original_table_treats_non_cte_table_as_wildcard() {
+        // A table that is not a known CTE has unknown columns, so *any*
+        // unqualified column is attributed to it.
+        let tables = vec!["physical".to_string()];
+        let alias_map = HashMap::new();
+        let cte_columns = HashMap::new();
+
+        assert_eq!(
+            find_original_table("anything", &tables, &alias_map, &cte_columns),
+            "physical"
+        );
+    }
+
+    #[test]
+    fn find_original_table_prefers_first_cte_on_column_collision() {
+        // When two CTEs both expose the column, the first table in FROM wins.
+        let tables = vec!["a".to_string(), "b".to_string()];
+        let alias_map = HashMap::new();
+        let mut cte_columns = HashMap::new();
+        cte_columns.insert("a".to_string(), vec![col("x")]);
+        cte_columns.insert("b".to_string(), vec![col("x")]);
+
+        assert_eq!(
+            find_original_table("x", &tables, &alias_map, &cte_columns),
+            "a"
+        );
+    }
+
+    #[test]
+    fn find_original_table_falls_through_to_later_cte_without_match() {
+        let tables = vec!["a".to_string(), "b".to_string()];
+        let alias_map = HashMap::new();
+        let mut cte_columns = HashMap::new();
+        cte_columns.insert("a".to_string(), vec![col("p")]);
+        cte_columns.insert("b".to_string(), vec![col("x")]);
+
+        assert_eq!(
+            find_original_table("x", &tables, &alias_map, &cte_columns),
+            "b"
+        );
+    }
+
+    #[test]
+    fn find_original_table_wildcard_shadows_following_tables() {
+        // A non-CTE table appearing before a CTE short-circuits resolution:
+        // the non-CTE table is returned even for a column the later CTE owns.
+        let tables = vec!["physical".to_string(), "cte_b".to_string()];
+        let alias_map = HashMap::new();
+        let mut cte_columns = HashMap::new();
+        cte_columns.insert("cte_b".to_string(), vec![col("x")]);
+
+        assert_eq!(
+            find_original_table("x", &tables, &alias_map, &cte_columns),
+            "physical"
+        );
+    }
+
+    #[test]
+    fn find_original_table_cte_takes_precedence_over_following_wildcard() {
+        let tables = vec!["cte_a".to_string(), "physical".to_string()];
+        let alias_map = HashMap::new();
+        let mut cte_columns = HashMap::new();
+        cte_columns.insert("cte_a".to_string(), vec![col("x")]);
+
+        // Column owned by the CTE resolves to the CTE...
+        assert_eq!(
+            find_original_table("x", &tables, &alias_map, &cte_columns),
+            "cte_a"
+        );
+        // ...but an unknown column falls through to the wildcard table.
+        assert_eq!(
+            find_original_table("y", &tables, &alias_map, &cte_columns),
+            "physical"
+        );
+    }
+
+    #[test]
+    fn find_original_table_falls_through_when_qualifier_is_unknown() {
+        // Qualified reference whose prefix is neither a table nor an alias:
+        // resolution falls back to matching the trailing column name.
+        let tables = vec!["cte_a".to_string()];
+        let alias_map = HashMap::new();
+        let mut cte_columns = HashMap::new();
+        cte_columns.insert("cte_a".to_string(), vec![col("x")]);
+
+        assert_eq!(
+            find_original_table("unknown.x", &tables, &alias_map, &cte_columns),
+            "cte_a"
         );
     }
 

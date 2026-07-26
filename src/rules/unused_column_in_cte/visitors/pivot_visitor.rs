@@ -18,9 +18,10 @@ impl NodeVisitor for PivotVisitor {
         // Get the FROM clause to know which tables are available
         // Find the parent FROM clause
         let (tables, alias_map) = find_tables_for_pivot(node, sql);
+        let resolver = utils::TableResolver::new(&tables, &alias_map, &context.cte_columns);
 
         // Extract all field/identifier references from the PIVOT clause
-        utils::extract_and_mark_fields(node, sql, &tables, &alias_map, context);
+        utils::extract_and_mark_fields(node, sql, &resolver, context);
     }
 }
 
