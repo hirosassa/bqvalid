@@ -7,10 +7,15 @@ use crate::rules::helpers::{get_node_text, is_function_name};
 use super::context::AnalysisContext;
 use super::models::ColumnInfo;
 
-/// Extract CTE name from a CTE node
+/// Extract CTE name from a CTE node.
+///
+/// A well-formed CTE always has an `alias_name` field. On a malformed tree
+/// where it is missing we return an empty name rather than panicking; an empty
+/// CTE name simply fails to match downstream lookups.
 pub fn get_cte_name<'a>(cte_node: &Node, sql: &'a str) -> &'a str {
-    let alias_node = cte_node.child_by_field_name("alias_name").unwrap();
-    get_node_text(&alias_node, sql)
+    cte_node
+        .child_by_field_name("alias_name")
+        .map_or("", |alias_node| get_node_text(&alias_node, sql))
 }
 
 /// Extract column name from a potentially qualified column reference
@@ -129,8 +134,17 @@ pub fn extract_and_mark_fields(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
+    use crate::rules::helpers::parse_sql;
 
     #[test]
     fn test_extract_column_name() {
@@ -143,5 +157,67 @@ mod tests {
     fn test_extract_table_name() {
         assert_eq!(extract_table_name("table"), "table");
         assert_eq!(extract_table_name("schema.table"), "schema");
+    }
+
+    fn col(name: &str) -> ColumnInfo {
+        ColumnInfo::new(None, name.to_string(), None, 0, 0)
+    }
+
+    #[test]
+    fn find_original_table_resolves_alias_to_real_table() {
+        let tables = vec!["orders".to_string()];
+        let mut alias_map = HashMap::new();
+        alias_map.insert("o".to_string(), "orders".to_string());
+        let cte_columns = HashMap::new();
+
+        assert_eq!(
+            find_original_table("o.id", &tables, &alias_map, &cte_columns),
+            "orders"
+        );
+    }
+
+    #[test]
+    fn find_original_table_uses_qualified_table_directly() {
+        let tables = vec!["users".to_string()];
+        let alias_map = HashMap::new();
+        let cte_columns = HashMap::new();
+
+        assert_eq!(
+            find_original_table("users.id", &tables, &alias_map, &cte_columns),
+            "users"
+        );
+    }
+
+    #[test]
+    fn find_original_table_matches_unqualified_column_against_cte() {
+        let tables = vec!["cte_a".to_string()];
+        let alias_map = HashMap::new();
+        let mut cte_columns = HashMap::new();
+        cte_columns.insert("cte_a".to_string(), vec![col("name"), col("email")]);
+
+        assert_eq!(
+            find_original_table("email", &tables, &alias_map, &cte_columns),
+            "cte_a"
+        );
+    }
+
+    #[test]
+    fn find_original_table_returns_empty_when_nothing_matches() {
+        let tables: Vec<String> = Vec::new();
+        let alias_map = HashMap::new();
+        let cte_columns = HashMap::new();
+
+        assert_eq!(
+            find_original_table("z.x", &tables, &alias_map, &cte_columns),
+            ""
+        );
+    }
+
+    #[test]
+    fn get_cte_name_is_empty_for_a_node_without_alias() {
+        // A non-CTE node has no `alias_name` field: we must get "" and not panic.
+        let sql = "SELECT 1";
+        let tree = parse_sql(sql);
+        assert_eq!(get_cte_name(&tree.root_node(), sql), "");
     }
 }

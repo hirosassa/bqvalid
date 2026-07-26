@@ -164,8 +164,8 @@ fn expand_asterisk(
             for col in cols {
                 let mut cloned_col = col.clone();
                 cloned_col.table_name = Some(cte_name.clone());
-                cloned_col.row = position.row + 1;
-                cloned_col.col = position.column + 1;
+                cloned_col.row = position.row.saturating_add(1);
+                cloned_col.col = position.column.saturating_add(1);
                 expanded_columns.push(cloned_col);
             }
         }
@@ -174,6 +174,14 @@ fn expand_asterisk(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
     use crate::rules::helpers::parse_sql;

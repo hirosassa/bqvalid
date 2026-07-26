@@ -30,3 +30,31 @@ harness = false
 [[bench]]
 name = "memory_profile"
 harness = false
+
+[profile.release]
+overflow-checks = true
+
+# Hardening gates: fail loudly at build time, never silently at runtime.
+# Panic-prone constructs and silent overflow are denied in non-test code;
+# test/bench modules opt out with a scoped `#[allow(..., reason = "test code")]`.
+[lints.rust]
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unreachable = "deny"
+todo = "deny"
+unimplemented = "deny"
+indexing_slicing = "deny"
+string_slice = "deny"
+unwrap_in_result = "deny"
+arithmetic_side_effects = "deny"
+as_conversions = "deny"
+cast_possible_truncation = "deny"
+cast_possible_wrap = "deny"
+cast_sign_loss = "deny"
+let_underscore_must_use = "deny"
+allow_attributes_without_reason = "deny"

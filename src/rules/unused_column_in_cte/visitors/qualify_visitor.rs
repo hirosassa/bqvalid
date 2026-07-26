@@ -32,6 +32,14 @@ impl NodeVisitor for QualifyVisitor {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
     use crate::rules::helpers::parse_sql;

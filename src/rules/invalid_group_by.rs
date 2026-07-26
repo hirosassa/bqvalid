@@ -75,8 +75,8 @@ fn check_select_expression(
             // Check if the identifier is in GROUP BY
             if !group_by_columns.contains(field_text) {
                 return Some(Diagnostic::new(
-                    node.start_position().row + 1,
-                    node.start_position().column + 1,
+                    node.start_position().row.saturating_add(1),
+                    node.start_position().column.saturating_add(1),
                     format!(
                         "Column '{}' must appear in the GROUP BY clause or be used in an aggregate function",
                         field_text
@@ -161,6 +161,14 @@ fn is_in_aggregate_function(node: &Node, sql: &str) -> bool {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
     use crate::rules::helpers::parse_sql;

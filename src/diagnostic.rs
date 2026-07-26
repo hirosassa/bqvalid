@@ -32,3 +32,22 @@ impl Display for Diagnostic {
         write!(f, "{}:{}: {}", self.row, self.col, self.message)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accessors_return_the_constructed_values() {
+        let d = Diagnostic::new(3, 5, "boom".to_string());
+        assert_eq!(d.row(), 3);
+        assert_eq!(d.col(), 5);
+        assert_eq!(d.message(), "boom");
+    }
+
+    #[test]
+    fn display_formats_as_row_col_message() {
+        let d = Diagnostic::new(3, 5, "boom".to_string());
+        assert_eq!(format!("{}", d), "3:5: boom");
+    }
+}

@@ -1,8 +1,13 @@
 use tree_sitter::Node;
 
-/// Extract text content from a tree-sitter node
+/// Extract text content from a tree-sitter node.
+///
+/// `sql` is a valid `&str`, and the node's byte range points into that same
+/// source, so `utf8_text` cannot actually fail here. We still avoid panicking:
+/// on the impossible error we fall back to an empty string, which yields no
+/// match downstream (a miss, never a false positive or a crash).
 pub fn get_node_text<'a>(node: &Node, sql: &'a str) -> &'a str {
-    node.utf8_text(sql.as_bytes()).unwrap()
+    node.utf8_text(sql.as_bytes()).unwrap_or_default()
 }
 
 /// Find the first child node with the specified kind
@@ -46,6 +51,12 @@ pub fn is_function_name(node: &Node) -> bool {
 
 /// Parse SQL string into a tree-sitter tree (test helper)
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test code"
+)]
 pub fn parse_sql(sql: &str) -> tree_sitter::Tree {
     use tree_sitter::Parser as TsParser;
     use tree_sitter_sql_bigquery::language;
@@ -56,6 +67,14 @@ pub fn parse_sql(sql: &str) -> tree_sitter::Tree {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
 

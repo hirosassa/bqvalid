@@ -66,7 +66,13 @@ fn main() -> ExitCode {
     let targets = args.files.into_iter().flat_map(|f| {
         WalkDir::new(f)
             .into_iter()
-            .filter_map(|e| e.ok())
+            .filter_map(|e| match e {
+                Ok(entry) => Some(entry),
+                Err(err) => {
+                    eprintln!("Error walking path: {}", err);
+                    None
+                }
+            })
             .filter(is_sql)
     });
 
@@ -107,8 +113,14 @@ fn is_sql(entry: &DirEntry) -> bool {
 
 fn analyse_sql(sql: &str) -> Vec<Diagnostic> {
     let mut parser = TsParser::new();
-    parser.set_language(&language()).unwrap();
-    let tree = parser.parse(sql, None).unwrap();
+    if let Err(e) = parser.set_language(&language()) {
+        eprintln!("Error loading BigQuery grammar: {}", e);
+        return Vec::new();
+    }
+    let Some(tree) = parser.parse(sql, None) else {
+        eprintln!("Error parsing SQL input");
+        return Vec::new();
+    };
 
     let mut diagnostics = Vec::new();
     diagnostics.extend(compare_table_suffix_with_subquery::check(&tree, sql));
@@ -120,6 +132,14 @@ fn analyse_sql(sql: &str) -> Vec<Diagnostic> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
     use std::fs::{self, File};
@@ -162,5 +182,54 @@ mod tests {
         diagnostics.extend(compare_table_suffix_with_subquery::check(&tree, &sql));
         diagnostics.extend(use_current_date::check(&tree, &sql));
         assert!(diagnostics.len() > 1);
+    }
+
+    #[test]
+    fn analyse_sql_empty_input_yields_no_diagnostics() {
+        assert!(analyse_sql("").is_empty());
+    }
+
+    #[test]
+    fn analyse_sql_clean_query_yields_no_diagnostics() {
+        // A plain, well-formed query with none of the linted anti-patterns.
+        assert!(analyse_sql("SELECT id, name FROM users").is_empty());
+    }
+
+    #[test]
+    fn analyse_sql_aggregates_multiple_rules_from_a_single_query() {
+        // Triggers both use_current_date and compare_table_suffix_with_subquery,
+        // proving analyse_sql fans a query out across every rule and merges results.
+        let sql = "SELECT CURRENT_DATE() AS d \
+                   FROM t \
+                   WHERE _TABLE_SUFFIX = (SELECT MAX(suffix) FROM u)";
+        let diagnostics = analyse_sql(sql);
+
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.to_string().contains("CURRENT_DATE")),
+            "expected a CURRENT_DATE diagnostic, got: {:?}",
+            diagnostics
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.to_string().contains("Full scan")),
+            "expected a full-scan diagnostic, got: {:?}",
+            diagnostics
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn analyse_sql_does_not_panic_on_garbage_input() {
+        // Unparseable input must degrade gracefully (no panic), not crash the tool.
+        let _ = analyse_sql("!@#$ not really ;; SQL (((");
+        let _ = analyse_sql("SELECT FROM WHERE");
     }
 }

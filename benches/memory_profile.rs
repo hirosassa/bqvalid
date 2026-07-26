@@ -1,6 +1,13 @@
 // Memory profiling benchmark using dhat
 // Run with: cargo bench --bench memory_profile
 // Results will be in dhat-heap.json, visualize at https://nnethercote.github.io/dh_view/dh_view.html
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::arithmetic_side_effects,
+    reason = "benchmark code"
+)]
 
 use std::fs;
 use tree_sitter::Parser as TsParser;

@@ -37,13 +37,21 @@ fn find_query_expr<'a>(node: &'a Node<'a>) -> Option<Node<'a>> {
 
 fn new_unnecessary_order_by_warning(order_by_node: &Node) -> Diagnostic {
     Diagnostic::new(
-        order_by_node.start_position().row + 1,
-        order_by_node.start_position().column + 1,
+        order_by_node.start_position().row.saturating_add(1),
+        order_by_node.start_position().column.saturating_add(1),
         "Unnecessary ORDER BY: This ORDER BY clause has no effect without LIMIT/OFFSET or in aggregate functions".to_string(),
     )
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
     use crate::rules::helpers::parse_sql;
