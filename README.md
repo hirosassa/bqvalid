@@ -98,6 +98,62 @@ When `--ignore` is given on the command line it replaces (does not merge with)
 the `ignore` list from the config file. An unknown rule ID is reported as a
 warning on stderr rather than silently ignored.
 
+## Using in CI (GitHub Actions)
+
+To run `bqvalid` in GitHub Actions, use the [`setup-bqvalid`](https://github.com/hirosassa/setup-bqvalid)
+action to install the binary and add it to `PATH`:
+
+```yaml
+- uses: hirosassa/setup-bqvalid@v1
+- run: bqvalid path/to/queries/
+```
+
+To pin a specific version, pass it via the `version` input (it defaults to
+`latest`):
+
+```yaml
+- uses: hirosassa/setup-bqvalid@v1
+  with:
+    version: 0.3.0
+- run: bqvalid path/to/queries/
+```
+
+For example, a workflow that lints all SQL files under `sql/` on every pull
+request looks like:
+
+```yaml
+name: bqvalid
+
+on: pull_request
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hirosassa/setup-bqvalid@v1
+      - run: bqvalid sql/
+```
+
+`bqvalid` exits with a non-zero status when it finds a violation, so the step
+(and the job) fails automatically.
+
+To surface diagnostics in GitHub code scanning instead of failing the job, emit
+SARIF and upload it. Because `bqvalid` returns a non-zero status on violations,
+the linting step would otherwise fail and skip the upload; set
+`continue-on-error: true` on it so the run always proceeds to the upload, and
+let code scanning report the findings:
+
+```yaml
+      - uses: hirosassa/setup-bqvalid@v1
+      - run: bqvalid --format sarif sql/ > bqvalid.sarif
+        continue-on-error: true
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: bqvalid.sarif
+```
+
 ## Linting Rules
 
 See the [rules page](https://github.com/hirosassa/bqvalid/blob/main/docs/rules.md)
