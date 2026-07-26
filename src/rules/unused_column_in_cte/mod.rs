@@ -10,12 +10,30 @@ use tree_sitter::Tree;
 use tree_sitter_traversal::{Order, traverse};
 
 use crate::diagnostic::Diagnostic;
+use crate::rules::rule::Rule;
 
 use context::AnalysisContext;
 use visitor::NodeVisitor;
 use visitors::{
     CteVisitor, PivotVisitor, QualifyVisitor, SelectStarVisitor, SelectVisitor, WhereVisitor,
 };
+
+/// Flags columns defined in a CTE but never referenced afterwards.
+///
+/// This rule needs cross-node analysis (which CTE columns get used anywhere in
+/// the query), so it walks the tree itself via [`Rule::check_tree`] rather than
+/// reacting to individual nodes in the shared traversal.
+pub struct UnusedColumnInCte;
+
+impl Rule for UnusedColumnInCte {
+    fn id(&self) -> &'static str {
+        "unused_column_in_cte"
+    }
+
+    fn check_tree(&self, tree: &Tree, sql: &str, diagnostics: &mut Vec<Diagnostic>) {
+        diagnostics.extend(check(tree, sql));
+    }
+}
 
 pub fn check(tree: &Tree, sql: &str) -> Vec<Diagnostic> {
     let mut context = AnalysisContext::new(sql);
