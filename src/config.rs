@@ -170,6 +170,18 @@ mod tests {
     }
 
     #[test]
+    fn read_error_displays_a_helpful_message() {
+        // A missing --config file surfaces to the user as this message, so the
+        // Read variant's Display is part of the contract.
+        let dir = tempdir().unwrap();
+        let err = Config::load(&dir.path().join("missing.toml")).unwrap_err();
+        assert!(
+            err.to_string().contains("cannot read config file"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
     fn load_malformed_toml_is_a_parse_error() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("bad.toml");

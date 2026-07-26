@@ -477,4 +477,34 @@ where
         let err = resolve_ignore_in(dir.path(), Some(path), Vec::new());
         assert!(err.is_err(), "a malformed config must be a hard error");
     }
+
+    #[test]
+    fn resolve_ignore_reports_a_missing_explicit_config() {
+        // An explicit --config that cannot be read must fail loudly rather than
+        // being silently treated as "no config".
+        let dir = tempdir().unwrap();
+        let missing = dir.path().join("does_not_exist.toml");
+
+        let err = resolve_ignore_in(dir.path(), Some(missing), Vec::new());
+        assert!(err.is_err(), "a missing explicit config must be an error");
+    }
+
+    #[test]
+    fn resolve_ignore_keeps_unknown_ids_without_failing() {
+        // An unknown rule id is warned about on stderr but must not be dropped
+        // or turned into an error: downstream it simply matches no rule.
+        let dir = tempdir().unwrap();
+
+        let ignore = resolve_ignore_in(
+            dir.path(),
+            None,
+            vec!["use_current_date".to_string(), "not_a_rule".to_string()],
+        )
+        .expect("unknown ids are not an error");
+
+        let expected: HashSet<String> = ["use_current_date".to_string(), "not_a_rule".to_string()]
+            .into_iter()
+            .collect();
+        assert_eq!(ignore, expected, "unknown ids are retained, not dropped");
+    }
 }
