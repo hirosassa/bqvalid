@@ -48,32 +48,37 @@ fn current_date_used(node: Node, src: &str) -> Option<Diagnostic> {
 )]
 mod tests {
     use super::*;
-    use crate::rules::helpers::parse_sql;
-    use std::fs;
+    use crate::rules::helpers::run_rule;
 
     #[test]
     fn current_date_is_used() {
-        let sql = fs::read_to_string("./sql/current_date_is_used.sql").unwrap();
-        let tree = parse_sql(&sql);
-
-        assert!(!UseCurrentDate.check(&tree, &sql).is_empty());
+        let sql = "\
+select
+  current_date,
+  column_a
+from
+  dataset.table
+";
+        assert!(!run_rule(&UseCurrentDate, sql).is_empty());
     }
 
     #[test]
     fn current_date_is_not_used() {
-        let sql = fs::read_to_string("./sql/sample.sql").unwrap();
-        let tree = parse_sql(&sql);
-
-        assert!(UseCurrentDate.check(&tree, &sql).is_empty());
+        let sql = "\
+select
+  *
+from
+  dataset.table
+";
+        assert!(run_rule(&UseCurrentDate, sql).is_empty());
     }
 
     #[test]
     fn check_flags_every_occurrence() {
         // Two calls on one line -> two diagnostics, each pointing at its own column.
         let sql = "SELECT CURRENT_DATE(), CURRENT_DATE() FROM t";
-        let tree = parse_sql(sql);
 
-        let diagnostics = UseCurrentDate.check(&tree, sql);
+        let diagnostics = run_rule(&UseCurrentDate, sql);
         assert_eq!(diagnostics.len(), 2);
         assert!(diagnostics.iter().all(|d| d.row() == 1));
 
@@ -95,7 +100,6 @@ mod tests {
     fn check_is_case_insensitive() {
         // Lowercase spelling must be flagged just like the canonical uppercase.
         let sql = "SELECT current_date() FROM t";
-        let tree = parse_sql(sql);
-        assert_eq!(UseCurrentDate.check(&tree, sql).len(), 1);
+        assert_eq!(run_rule(&UseCurrentDate, sql).len(), 1);
     }
 }
