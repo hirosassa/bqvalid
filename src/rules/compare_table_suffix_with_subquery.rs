@@ -100,53 +100,86 @@ fn new_full_scan_warning(subquery_node: &Node) -> Diagnostic {
 mod tests {
     use super::*;
     use crate::rules::helpers::parse_sql;
-    use std::fs;
 
     #[test]
     fn valid() {
-        let sql = fs::read_to_string("./sql/valid.sql").unwrap();
-        let tree = parse_sql(&sql);
+        let sql = "\
+select
+  *
+from
+  dataset.table
+";
+        let tree = parse_sql(sql);
 
         for node in traverse(tree.walk(), Order::Pre) {
             if node.kind() == "where_clause" {
-                assert!(compared_with_subquery_in_binary_expression(node, &sql).is_none());
-                assert!(compared_with_subquery_in_between_expression(node, &sql).is_none());
+                assert!(compared_with_subquery_in_binary_expression(node, sql).is_none());
+                assert!(compared_with_subquery_in_between_expression(node, sql).is_none());
             }
         }
     }
 
     #[test]
     fn binary_op() {
-        let sql = fs::read_to_string("./sql/subquery_with_binary_op.sql").unwrap();
-        let tree = parse_sql(&sql);
+        let sql = "\
+select
+  *
+from
+  dataset.table
+where
+  _table_suffix  = (
+    select dt from dates
+  )
+";
+        let tree = parse_sql(sql);
 
         for node in traverse(tree.walk(), Order::Pre) {
             if node.kind() == "where_clause" {
-                assert!(compared_with_subquery_in_binary_expression(node, &sql).is_some());
+                assert!(compared_with_subquery_in_binary_expression(node, sql).is_some());
             }
         }
     }
 
     #[test]
     fn between_from() {
-        let sql = fs::read_to_string("./sql/subquery_with_between_from.sql").unwrap();
-        let tree = parse_sql(&sql);
+        let sql = "\
+select
+  *
+from
+  dataset.table
+where
+  _table_suffix between (
+    select dt from dates
+  )
+  and '2022-06-01'
+";
+        let tree = parse_sql(sql);
 
         for node in traverse(tree.walk(), Order::Pre) {
             if node.kind() == "where_clause" {
-                assert!(compared_with_subquery_in_between_expression(node, &sql).is_some());
+                assert!(compared_with_subquery_in_between_expression(node, sql).is_some());
             }
         }
     }
 
     #[test]
     fn between_to() {
-        let sql = fs::read_to_string("./sql/subquery_with_between_to.sql").unwrap();
-        let tree = parse_sql(&sql);
+        let sql = "\
+select
+  *
+from
+  dataset.table
+where
+  _table_suffix between '2022-06-01'
+  and (
+    select dt from dates
+  )
+";
+        let tree = parse_sql(sql);
 
         for node in traverse(tree.walk(), Order::Pre) {
             if node.kind() == "where_clause" {
-                assert!(compared_with_subquery_in_between_expression(node, &sql).is_some());
+                assert!(compared_with_subquery_in_between_expression(node, sql).is_some());
             }
         }
     }

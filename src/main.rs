@@ -250,11 +250,21 @@ mod tests {
         let mut parser = TsParser::new();
         parser.set_language(&language()).unwrap();
 
-        let sql = fs::read_to_string("./sql/current_date_and_subquery_with_between_are_used.sql")
-            .unwrap();
-        let tree = parser.parse(&sql, None).unwrap();
+        let sql = "\
+select
+  current_date,
+  column_a
+from
+  dataset.table
+where
+  _table_suffix between '2022-06-01'
+  and (
+    select dt from dates
+  )
+";
+        let tree = parser.parse(sql, None).unwrap();
 
-        let diagnostics = run_rules(&tree, &sql);
+        let diagnostics = run_rules(&tree, sql);
         assert!(diagnostics.len() > 1);
     }
 

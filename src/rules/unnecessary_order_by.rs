@@ -59,27 +59,91 @@ fn find_query_expr<'a>(node: &'a Node<'a>) -> Option<Node<'a>> {
 )]
 mod tests {
     use super::*;
-    use crate::rules::helpers::parse_sql;
+    use crate::rules::helpers::run_rule;
     use rstest::rstest;
-    use std::fs;
 
     #[rstest]
-    #[case("./sql/unnecessary_order_by_in_cte.sql", 1)]
-    #[case("./sql/unnecessary_order_by_in_subquery.sql", 1)]
-    fn test_unnecessary_order_by_exists(#[case] sql_file: &str, #[case] expected_count: usize) {
-        let sql = fs::read_to_string(sql_file).unwrap();
-        let tree = parse_sql(&sql);
-
-        let diagnostics = UnnecessaryOrderBy.check(&tree, &sql);
+    #[case(
+        "\
+-- Unnecessary ORDER BY in CTE
+with sorted_data as (
+  select
+    id,
+    name
+  from
+    table1
+  order by id  -- This ORDER BY is ignored
+)
+select
+  *
+from
+  sorted_data
+",
+        1
+    )]
+    #[case(
+        "\
+-- Unnecessary ORDER BY in subquery
+select
+  *
+from (
+  select
+    id,
+    name
+  from
+    table1
+  order by id  -- This ORDER BY is ignored
+)
+where
+  name = 'test'
+",
+        1
+    )]
+    fn test_unnecessary_order_by_exists(#[case] sql: &str, #[case] expected_count: usize) {
+        let diagnostics = run_rule(&UnnecessaryOrderBy, sql);
         assert_eq!(diagnostics.len(), expected_count);
     }
 
     #[test]
     fn test_valid_order_by_with_limit() {
-        let sql = fs::read_to_string("./sql/valid_order_by_with_limit.sql").unwrap();
-        let tree = parse_sql(&sql);
+        let sql = "\
+-- Valid: ORDER BY with LIMIT in CTE
+with top_users as (
+  select
+    id,
+    name
+  from
+    table1
+  order by id
+  limit 10
+)
+select
+  *
+from
+  top_users
 
-        let diagnostics = UnnecessaryOrderBy.check(&tree, &sql);
+-- Valid: ORDER BY with LIMIT in subquery
+select
+  *
+from (
+  select
+    id,
+    name
+  from
+    table1
+  order by id
+  limit 10
+)
+
+-- Valid: ORDER BY in final SELECT
+select
+  id,
+  name
+from
+  table1
+order by id
+";
+        let diagnostics = run_rule(&UnnecessaryOrderBy, sql);
         assert!(diagnostics.is_empty());
     }
 }

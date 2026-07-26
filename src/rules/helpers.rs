@@ -93,6 +93,20 @@ pub fn parse_sql(sql: &str) -> tree_sitter::Tree {
     parser.parse(sql, None).unwrap()
 }
 
+/// Parse `sql` and run a single rule over it, returning its diagnostics.
+///
+/// Collapses the repeated `parse_sql(...)` + `rule.check(&tree, sql)` boilerplate
+/// in rule tests so each case can pass an inline SQL literal and assert on the
+/// result directly.
+#[cfg(test)]
+pub fn run_rule<R: crate::rules::rule::Rule>(
+    rule: &R,
+    sql: &str,
+) -> Vec<crate::diagnostic::Diagnostic> {
+    let tree = parse_sql(sql);
+    rule.check(&tree, sql)
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
