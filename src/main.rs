@@ -5,7 +5,7 @@ use clap_verbosity_flag::Verbosity;
 use log::debug;
 use rayon::prelude::*;
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use tree_sitter::Parser as TsParser;
@@ -53,8 +53,9 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         };
         let diagnostics = analyse_sql(&mut parser, &sql);
-        for diagnostic in &diagnostics {
-            eprintln!("{}", diagnostic);
+        if let Err(e) = write_diagnostics(&mut io::stdout().lock(), &diagnostics) {
+            eprintln!("Error writing diagnostics: {}", e);
+            return ExitCode::FAILURE;
         }
         return if diagnostics.is_empty() {
             ExitCode::SUCCESS
@@ -84,24 +85,51 @@ fn main() -> ExitCode {
 
     let results = analyse_paths(targets);
 
-    let mut has_error = false;
-    let mut has_diagnostics = false;
-    for result in &results {
-        if let Some(err) = &result.read_error {
-            eprintln!("{}: Error reading file: {}", result.path.display(), err);
-            has_error = true;
+    match report(&results, &mut io::stdout().lock(), &mut io::stderr().lock()) {
+        Ok(true) => ExitCode::FAILURE,
+        Ok(false) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("Error writing output: {}", e);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Write lint diagnostics (the tool's normal output) to `out`. Used for the
+/// stdin path, where there is a single input with no path prefix.
+fn write_diagnostics<W: Write>(out: &mut W, diagnostics: &[Diagnostic]) -> io::Result<()> {
+    for diagnostic in diagnostics {
+        writeln!(out, "{}", diagnostic)?;
+    }
+    Ok(())
+}
+
+/// Render per-file results: lint diagnostics go to `out` (stdout) so they can be
+/// piped, while the tool's own failures (unreadable files) go to `err` (stderr).
+/// Returns `true` when any diagnostic or read error was emitted, so the caller
+/// can pick the exit code.
+fn report<O: Write, E: Write>(
+    results: &[FileResult],
+    out: &mut O,
+    err: &mut E,
+) -> io::Result<bool> {
+    let mut has_problem = false;
+    for result in results {
+        if let Some(read_error) = &result.read_error {
+            writeln!(
+                err,
+                "{}: Error reading file: {}",
+                result.path.display(),
+                read_error
+            )?;
+            has_problem = true;
         }
         for diagnostic in &result.diagnostics {
-            eprintln!("{}: {}", result.path.display(), diagnostic);
-            has_diagnostics = true;
+            writeln!(out, "{}: {}", result.path.display(), diagnostic)?;
+            has_problem = true;
         }
     }
-
-    if has_error || has_diagnostics {
-        ExitCode::FAILURE
-    } else {
-        ExitCode::SUCCESS
-    }
+    Ok(has_problem)
 }
 
 fn is_sql(entry: &DirEntry) -> bool {
@@ -318,6 +346,85 @@ mod tests {
             results.iter().all(|r| !r.diagnostics.is_empty()),
             "each file's diagnostics must be aggregated"
         );
+    }
+
+    #[test]
+    fn write_diagnostics_emits_each_diagnostic_to_the_writer() {
+        // D5: lint results are the tool's normal output and must go to stdout.
+        let diagnostics = vec![
+            Diagnostic::new(1, 1, "first".to_string()),
+            Diagnostic::new(2, 3, "second".to_string()),
+        ];
+        let mut out = Vec::new();
+        write_diagnostics(&mut out, &diagnostics).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains("first"));
+        assert!(out.contains("second"));
+    }
+
+    #[test]
+    fn report_writes_diagnostics_to_stdout_and_read_errors_to_stderr() {
+        // D5: diagnostics (normal lint output) go to the out stream; the tool's
+        // own failures (unreadable file) go to the err stream, so the two never
+        // mix on the same pipe.
+        let dir = tempdir().unwrap();
+        let results = vec![
+            FileResult {
+                path: dir.path().join("good.sql"),
+                diagnostics: vec![Diagnostic::new(1, 8, "some warning".to_string())],
+                read_error: None,
+            },
+            FileResult {
+                path: dir.path().join("missing.sql"),
+                diagnostics: Vec::new(),
+                read_error: Some("no such file".to_string()),
+            },
+        ];
+
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let has_problem = report(&results, &mut out, &mut err).unwrap();
+
+        assert!(
+            has_problem,
+            "a diagnostic or read error must flag a problem"
+        );
+        let out = String::from_utf8(out).unwrap();
+        let err = String::from_utf8(err).unwrap();
+        assert!(
+            out.contains("some warning"),
+            "diagnostic must land on stdout"
+        );
+        assert!(
+            !out.contains("Error reading file"),
+            "tool errors must not appear on stdout"
+        );
+        assert!(
+            err.contains("Error reading file"),
+            "read error must land on stderr"
+        );
+        assert!(
+            !err.contains("some warning"),
+            "diagnostics must not appear on stderr"
+        );
+    }
+
+    #[test]
+    fn report_flags_no_problem_for_clean_results() {
+        let dir = tempdir().unwrap();
+        let results = vec![FileResult {
+            path: dir.path().join("clean.sql"),
+            diagnostics: Vec::new(),
+            read_error: None,
+        }];
+
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let has_problem = report(&results, &mut out, &mut err).unwrap();
+
+        assert!(!has_problem);
+        assert!(out.is_empty());
+        assert!(err.is_empty());
     }
 
     #[test]
