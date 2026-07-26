@@ -2,6 +2,19 @@
 
 The list of the linting rules are as follows.
 
+Each rule has a severity: `Error` marks a query that BigQuery would reject at
+runtime, and `Warning` marks a performance or maintainability problem that still
+runs. The severity is carried in the machine-readable output (see `--format` in
+the [README](https://github.com/hirosassa/bqvalid/blob/main/README.md#output-formats)).
+
+| Rule | Severity |
+| --- | --- |
+| Comparing `_TABLE_SUFFIX` with subquery | Warning |
+| Using CURRENT_DATE | Warning |
+| Contains unused columns in CTE | Warning |
+| Unnecessary ORDER BY in CTE or subquery | Warning |
+| Invalid GROUP BY usage | Error |
+
 ## Comparing `_TABLE_SUFFIX` with subquery
 
 Comparing `_TABLE_SUFFIX` pseudo column with dynamic expression like subquery will cause full scan on wildcard tables.
