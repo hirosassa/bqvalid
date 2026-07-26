@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use tree_sitter::{Node, Tree};
 use tree_sitter_traversal::{Order, traverse};
 
@@ -56,14 +58,29 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
     ]
 }
 
-/// Run all registered rules over `tree` in a single pre-order traversal.
+/// The id of every registered rule. Callers use this to validate user-supplied
+/// ignore lists so unknown ids can be reported rather than silently dropped.
+pub fn known_rule_ids() -> HashSet<&'static str> {
+    all_rules().iter().map(|r| r.id()).collect()
+}
+
+/// Run every registered rule over `tree`, see [`run_rules_ignoring`].
+pub fn run_rules(tree: &Tree, sql: &str) -> Vec<Diagnostic> {
+    run_rules_ignoring(tree, sql, &HashSet::new())
+}
+
+/// Run the registered rules over `tree` in a single pre-order traversal,
+/// skipping any rule whose id is in `ignore`.
 ///
 /// Node-driven rules each inspect every node during the one shared pass, rather
 /// than each rule walking the whole tree on its own. Tree-driven rules run
 /// afterwards. Diagnostics come out in traversal order for the node-driven
 /// rules, followed by the tree-driven ones.
-pub fn run_rules(tree: &Tree, sql: &str) -> Vec<Diagnostic> {
-    let rules = all_rules();
+pub fn run_rules_ignoring(tree: &Tree, sql: &str, ignore: &HashSet<String>) -> Vec<Diagnostic> {
+    let rules: Vec<Box<dyn Rule>> = all_rules()
+        .into_iter()
+        .filter(|rule| !ignore.contains(rule.id()))
+        .collect();
     let mut diagnostics = Vec::new();
 
     for node in traverse(tree.walk(), Order::Pre) {
@@ -154,5 +171,67 @@ mod tests {
         let sql = "SELECT id, name FROM users";
         let tree = parse_sql(sql);
         assert!(run_rules(&tree, sql).is_empty());
+    }
+
+    #[test]
+    fn known_rule_ids_matches_the_registry() {
+        let ids = known_rule_ids();
+        assert_eq!(ids.len(), all_rules().len());
+        assert!(ids.contains("use_current_date"));
+        assert!(ids.contains("compare_table_suffix_with_subquery"));
+    }
+
+    #[test]
+    fn run_rules_ignoring_skips_the_named_rule() {
+        // This query trips use_current_date and compare_table_suffix_with_subquery.
+        // Ignoring the former must drop only its diagnostic, leaving the other.
+        let sql = "SELECT CURRENT_DATE() AS d \
+                   FROM t \
+                   WHERE _TABLE_SUFFIX = (SELECT MAX(suffix) FROM u)";
+        let tree = parse_sql(sql);
+        let ignore: HashSet<String> = std::iter::once("use_current_date".to_string()).collect();
+
+        let diagnostics = run_rules_ignoring(&tree, sql, &ignore);
+
+        assert!(
+            !diagnostics
+                .iter()
+                .any(|d| d.message().contains("CURRENT_DATE")),
+            "ignored rule must not fire"
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message().contains("Full scan")),
+            "other rules must still fire"
+        );
+    }
+
+    #[test]
+    fn run_rules_ignoring_with_empty_set_matches_run_rules() {
+        let sql = "SELECT CURRENT_DATE() AS d FROM t";
+        let tree = parse_sql(sql);
+
+        let baseline: Vec<String> = run_rules(&tree, sql)
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        let ignoring: Vec<String> = run_rules_ignoring(&tree, sql, &HashSet::new())
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+
+        assert_eq!(baseline, ignoring);
+    }
+
+    #[test]
+    fn run_rules_ignoring_every_rule_yields_nothing() {
+        let sql = "SELECT CURRENT_DATE() AS d \
+                   FROM t \
+                   WHERE _TABLE_SUFFIX = (SELECT MAX(suffix) FROM u)";
+        let tree = parse_sql(sql);
+        let ignore: HashSet<String> = known_rule_ids().iter().map(|s| s.to_string()).collect();
+
+        assert!(run_rules_ignoring(&tree, sql, &ignore).is_empty());
     }
 }
