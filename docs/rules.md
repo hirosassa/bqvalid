@@ -7,13 +7,17 @@ runtime, and `Warning` marks a performance or maintainability problem that still
 runs. The severity is carried in the machine-readable output (see `--format` in
 the [README](https://github.com/hirosassa/bqvalid/blob/main/README.md#output-formats)).
 
-| Rule | Severity |
-| --- | --- |
-| Comparing `_TABLE_SUFFIX` with subquery | Warning |
-| Using CURRENT_DATE | Warning |
-| Contains unused columns in CTE | Warning |
-| Unnecessary ORDER BY in CTE or subquery | Warning |
-| Invalid GROUP BY usage | Error |
+The `Rule ID` is the stable identifier used to disable a rule via `--ignore` or
+the config file (see
+[Ignoring rules](https://github.com/hirosassa/bqvalid/blob/main/README.md#ignoring-rules)).
+
+| Rule | Rule ID | Severity |
+| --- | --- | --- |
+| Comparing `_TABLE_SUFFIX` with subquery | `compare_table_suffix_with_subquery` | Warning |
+| Using CURRENT_DATE | `use_current_date` | Warning |
+| Contains unused columns in CTE | `unused_column_in_cte` | Warning |
+| Unnecessary ORDER BY in CTE or subquery | `unnecessary_order_by` | Warning |
+| Invalid GROUP BY usage | `invalid_group_by` | Error |
 
 ## Comparing `_TABLE_SUFFIX` with subquery
 

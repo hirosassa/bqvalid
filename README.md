@@ -58,6 +58,46 @@ bqvalid --format sarif sql/   # SARIF 2.1.0, e.g. for GitHub code scanning
 Lint diagnostics go to stdout; the tool's own errors (unreadable files, parse
 failures) go to stderr, so either format can be piped cleanly.
 
+### Ignoring rules
+
+Every rule is enabled by default. You can suppress individual rules by their
+stable rule ID (listed on the [rules page](https://github.com/hirosassa/bqvalid/blob/main/docs/rules.md))
+either on the command line or via a config file.
+
+On the command line, pass `--ignore` with a rule ID. To ignore more than one
+rule, give a comma-separated list or repeat the flag:
+
+```shell
+# ignore a single rule
+bqvalid --ignore use_current_date sql/
+
+# ignore multiple rules, comma-separated
+bqvalid --ignore use_current_date,unnecessary_order_by sql/
+
+# equivalently, by repeating the flag
+bqvalid --ignore use_current_date --ignore unnecessary_order_by sql/
+```
+
+Or put the ignore list in a `bqvalid.toml` file:
+
+```toml
+# bqvalid.toml
+ignore = ["use_current_date", "unnecessary_order_by"]
+```
+
+`bqvalid` looks for `bqvalid.toml` in the current directory and walks up to the
+git repository root (the directory containing `.git`), using the nearest one it
+finds; outside a git repository only the current directory is checked. Point at
+a specific file with `--config`:
+
+```shell
+bqvalid --config path/to/bqvalid.toml sql/
+```
+
+When `--ignore` is given on the command line it replaces (does not merge with)
+the `ignore` list from the config file. An unknown rule ID is reported as a
+warning on stderr rather than silently ignored.
+
 ## Linting Rules
 
 See the [rules page](https://github.com/hirosassa/bqvalid/blob/main/docs/rules.md)

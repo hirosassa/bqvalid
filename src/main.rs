@@ -1,13 +1,15 @@
+use bqvalid::config::{self, Config};
 use bqvalid::diagnostic::Diagnostic;
 use bqvalid::output::{self, FileResult, OutputFormat};
-use bqvalid::rules::run_rules;
+use bqvalid::rules::{known_rule_ids, run_rules_ignoring};
 use clap::Parser;
 use clap_verbosity_flag::Verbosity;
 use log::debug;
 use rayon::prelude::*;
+use std::collections::HashSet;
 use std::fs;
 use std::io::{self, Read, Stdin};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use tree_sitter::Parser as TsParser;
 use tree_sitter_sql_bigquery::language;
@@ -34,6 +36,17 @@ struct Args {
     #[clap(long, value_enum, default_value_t = OutputFormat::Plain)]
     format: OutputFormat,
 
+    /// Rule id to ignore (suppress its diagnostics). Accepts a comma-separated
+    /// list and is repeatable. When given, overrides the `ignore` list from the
+    /// config file.
+    #[clap(long, value_name = "RULE_ID", value_delimiter = ',')]
+    ignore: Vec<String>,
+
+    /// Path to a TOML config file. Defaults to `bqvalid.toml` in the current
+    /// directory when present.
+    #[clap(long, value_name = "PATH")]
+    config: Option<PathBuf>,
+
     #[clap(flatten)]
     verbose: Verbosity,
 }
@@ -46,15 +59,23 @@ fn main() -> ExitCode {
         .init();
     debug!("verbose mode");
 
+    let ignore = match resolve_ignore(args.config, args.ignore) {
+        Ok(ignore) => ignore,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return ExitCode::FAILURE;
+        }
+    };
+
     // Both inputs converge on `Vec<FileResult>`; `show_paths` only distinguishes
     // the two in the plain format (files prefix the path, stdin does not).
     let (results, show_paths) = if args.files.is_empty() {
-        match analyse_stdin(&stdin) {
+        match analyse_stdin(&stdin, &ignore) {
             Some(results) => (results, false),
             None => return ExitCode::FAILURE,
         }
     } else {
-        (analyse_paths(collect_targets(args.files)), true)
+        (analyse_paths(collect_targets(args.files), &ignore), true)
     };
 
     let mut out = io::stdout().lock();
@@ -79,7 +100,7 @@ fn main() -> ExitCode {
 /// Read SQL from stdin and analyse it as a single `<stdin>` result. Returns
 /// `None` (after logging to stderr) when the input cannot be read or the
 /// grammar fails to load, so the caller can exit with a failure code.
-fn analyse_stdin(stdin: &Stdin) -> Option<Vec<FileResult>> {
+fn analyse_stdin(stdin: &Stdin, ignore: &HashSet<String>) -> Option<Vec<FileResult>> {
     let mut sql = String::new();
     let read_result = stdin.lock().read_to_string(&mut sql);
     if let Err(e) = read_result {
@@ -89,7 +110,7 @@ fn analyse_stdin(stdin: &Stdin) -> Option<Vec<FileResult>> {
     let mut parser = new_parser()?;
     Some(vec![FileResult {
         path: PathBuf::from("<stdin>"),
-        diagnostics: analyse_sql(&mut parser, &sql),
+        diagnostics: analyse_sql(&mut parser, &sql, ignore),
         read_error: None,
     }])
 }
@@ -141,14 +162,14 @@ fn new_parser() -> Option<TsParser> {
 /// (via `map_init`) and reuses it across the files it handles, so the grammar
 /// is loaded per thread rather than per file. Results are sorted by path so the
 /// output is stable regardless of scheduling.
-fn analyse_paths(paths: Vec<PathBuf>) -> Vec<FileResult> {
+fn analyse_paths(paths: Vec<PathBuf>, ignore: &HashSet<String>) -> Vec<FileResult> {
     let mut results: Vec<FileResult> = paths
         .par_iter()
         .map_init(new_parser, |parser, path| match fs::read_to_string(path) {
             Ok(sql) => {
                 let diagnostics = parser
                     .as_mut()
-                    .map_or_else(Vec::new, |parser| analyse_sql(parser, &sql));
+                    .map_or_else(Vec::new, |parser| analyse_sql(parser, &sql, ignore));
                 FileResult {
                     path: path.clone(),
                     diagnostics,
@@ -166,13 +187,46 @@ fn analyse_paths(paths: Vec<PathBuf>) -> Vec<FileResult> {
     results
 }
 
-fn analyse_sql(parser: &mut TsParser, sql: &str) -> Vec<Diagnostic> {
+fn analyse_sql(parser: &mut TsParser, sql: &str, ignore: &HashSet<String>) -> Vec<Diagnostic> {
     let Some(tree) = parser.parse(sql, None) else {
         eprintln!("Error parsing SQL input");
         return Vec::new();
     };
 
-    run_rules(&tree, sql)
+    run_rules_ignoring(&tree, sql, ignore)
+}
+
+/// Resolve the effective set of ignored rule ids from the config file and CLI.
+/// Discovers the config by walking up from the current directory to the git
+/// repository root, lets a non-empty CLI `--ignore` override it, and warns
+/// about ids that match no known rule. Returns an error string when the config
+/// cannot be loaded.
+fn resolve_ignore(
+    config_path: Option<PathBuf>,
+    cli_ignore: Vec<String>,
+) -> Result<HashSet<String>, String> {
+    let cwd = std::env::current_dir()
+        .map_err(|e| format!("cannot determine current directory: {}", e))?;
+    resolve_ignore_in(&cwd, config_path, cli_ignore)
+}
+
+/// Core of [`resolve_ignore`], parameterized by the directory used to discover
+/// the default config file so it can be exercised without touching the process
+/// working directory.
+fn resolve_ignore_in(
+    cwd: &Path,
+    config_path: Option<PathBuf>,
+    cli_ignore: Vec<String>,
+) -> Result<HashSet<String>, String> {
+    let config = match config::discover_config(config_path, cwd) {
+        Some(path) => Config::load(&path).map_err(|e| e.to_string())?,
+        None => Config::default(),
+    };
+    let ignore = config::effective_ignore(cli_ignore, config.ignore);
+    for id in config::unknown_ignore_ids(&ignore, &known_rule_ids()) {
+        eprintln!("Warning: unknown rule id in ignore list: {}", id);
+    }
+    Ok(ignore.into_iter().collect())
 }
 
 #[cfg(test)]
@@ -193,7 +247,7 @@ mod tests {
     /// binary drives `analyse_sql`.
     fn analyse(sql: &str) -> Vec<Diagnostic> {
         let mut parser = new_parser().expect("grammar loads");
-        analyse_sql(&mut parser, sql)
+        analyse_sql(&mut parser, sql, &HashSet::new())
     }
 
     #[test]
@@ -239,7 +293,7 @@ where
 ";
         let tree = parser.parse(sql, None).unwrap();
 
-        let diagnostics = run_rules(&tree, sql);
+        let diagnostics = run_rules_ignoring(&tree, sql, &HashSet::new());
         assert!(diagnostics.len() > 1);
     }
 
@@ -260,8 +314,8 @@ where
         // grammar. Each parse must stay independent (no state leaking between
         // calls), so a clean query after a dirty one still yields nothing.
         let mut parser = new_parser().expect("grammar loads");
-        let dirty = analyse_sql(&mut parser, "SELECT CURRENT_DATE()");
-        let clean = analyse_sql(&mut parser, "SELECT id FROM users");
+        let dirty = analyse_sql(&mut parser, "SELECT CURRENT_DATE()", &HashSet::new());
+        let clean = analyse_sql(&mut parser, "SELECT id FROM users", &HashSet::new());
         assert!(!dirty.is_empty(), "dirty query should produce diagnostics");
         assert!(clean.is_empty(), "clean query should produce none");
     }
@@ -320,7 +374,7 @@ where
             dir.path().join("b.sql"),
         ];
 
-        let results = analyse_paths(paths);
+        let results = analyse_paths(paths, &HashSet::new());
 
         let ordered: Vec<PathBuf> = results.iter().map(|r| r.path.clone()).collect();
         let mut expected = ordered.clone();
@@ -340,11 +394,87 @@ where
         let dir = tempdir().unwrap();
         let missing = dir.path().join("does_not_exist.sql");
 
-        let results = analyse_paths(vec![missing.clone()]);
+        let results = analyse_paths(vec![missing.clone()], &HashSet::new());
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].path, missing);
         assert!(results[0].read_error.is_some());
         assert!(results[0].diagnostics.is_empty());
+    }
+
+    #[test]
+    fn resolve_ignore_reads_the_config_ignore_list() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("bqvalid.toml"),
+            "ignore = [\"use_current_date\"]",
+        )
+        .unwrap();
+
+        let ignore = resolve_ignore_in(dir.path(), None, Vec::new()).expect("loads config");
+        assert_eq!(
+            ignore,
+            std::iter::once("use_current_date".to_string()).collect()
+        );
+    }
+
+    #[test]
+    fn resolve_ignore_cli_overrides_config_file() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("bqvalid.toml"),
+            "ignore = [\"use_current_date\"]",
+        )
+        .unwrap();
+
+        let ignore = resolve_ignore_in(dir.path(), None, vec!["invalid_group_by".to_string()])
+            .expect("loads config");
+        assert_eq!(
+            ignore,
+            std::iter::once("invalid_group_by".to_string()).collect(),
+            "CLI --ignore replaces the config list"
+        );
+    }
+
+    #[test]
+    fn resolve_ignore_is_empty_without_config_or_cli() {
+        let dir = tempdir().unwrap();
+        let ignore = resolve_ignore_in(dir.path(), None, Vec::new()).expect("no config is fine");
+        assert!(ignore.is_empty());
+    }
+
+    #[test]
+    fn ignore_flag_accepts_comma_separated_rules() {
+        let args = Args::try_parse_from([
+            "bqvalid",
+            "--ignore",
+            "use_current_date,unnecessary_order_by",
+            "x.sql",
+        ])
+        .expect("parses");
+        assert_eq!(
+            args.ignore,
+            vec![
+                "use_current_date".to_string(),
+                "unnecessary_order_by".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn ignore_flag_still_accepts_repeated_flags() {
+        let args = Args::try_parse_from(["bqvalid", "--ignore", "a", "--ignore", "b", "x.sql"])
+            .expect("parses");
+        assert_eq!(args.ignore, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn resolve_ignore_reports_a_broken_config() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("custom.toml");
+        fs::write(&path, "ignore = not-a-list").unwrap();
+
+        let err = resolve_ignore_in(dir.path(), Some(path), Vec::new());
+        assert!(err.is_err(), "a malformed config must be a hard error");
     }
 }
