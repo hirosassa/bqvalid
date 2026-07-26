@@ -1,21 +1,25 @@
-use tree_sitter::{Node, Tree};
-use tree_sitter_traversal::{Order, traverse};
+use tree_sitter::Node;
 
 use crate::diagnostic::Diagnostic;
 use crate::rules::helpers::{find_child_of_kind, has_child_of_kind};
+use crate::rules::rule::Rule;
 
-pub fn check(tree: &Tree, sql: &str) -> Vec<Diagnostic> {
-    let mut diagnostics = Vec::new();
+/// Flags `ORDER BY` in a CTE or subquery without `LIMIT`, where the sort has no
+/// effect and only wastes work.
+pub struct UnnecessaryOrderBy;
 
-    for node in traverse(tree.root_node().walk(), Order::Pre) {
+impl Rule for UnnecessaryOrderBy {
+    fn id(&self) -> &'static str {
+        "unnecessary_order_by"
+    }
+
+    fn check_node(&self, node: Node<'_>, sql: &str, diagnostics: &mut Vec<Diagnostic>) {
         if matches!(node.kind(), "cte" | "select_subexpression")
             && let Some(diagnostic) = check_unnecessary_order_by_in_scope(&node, sql)
         {
             diagnostics.push(diagnostic);
         }
     }
-
-    diagnostics
 }
 
 fn check_unnecessary_order_by_in_scope(scope_node: &Node, _sql: &str) -> Option<Diagnostic> {
@@ -65,7 +69,7 @@ mod tests {
         let sql = fs::read_to_string(sql_file).unwrap();
         let tree = parse_sql(&sql);
 
-        let diagnostics = check(&tree, &sql);
+        let diagnostics = UnnecessaryOrderBy.check(&tree, &sql);
         assert_eq!(diagnostics.len(), expected_count);
     }
 
@@ -74,7 +78,7 @@ mod tests {
         let sql = fs::read_to_string("./sql/valid_order_by_with_limit.sql").unwrap();
         let tree = parse_sql(&sql);
 
-        let diagnostics = check(&tree, &sql);
+        let diagnostics = UnnecessaryOrderBy.check(&tree, &sql);
         assert!(diagnostics.is_empty());
     }
 }

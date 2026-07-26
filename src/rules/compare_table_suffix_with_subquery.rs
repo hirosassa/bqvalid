@@ -1,13 +1,19 @@
-use tree_sitter::{Node, Tree};
+use tree_sitter::Node;
 use tree_sitter_traversal::{Order, traverse};
 
 use crate::diagnostic::Diagnostic;
 use crate::rules::helpers::get_node_text;
+use crate::rules::rule::Rule;
 
-pub fn check(tree: &Tree, sql: &str) -> Vec<Diagnostic> {
-    let mut diagnostics = Vec::new();
+/// Flags `_TABLE_SUFFIX` compared against a subquery, which forces a full scan.
+pub struct CompareTableSuffixWithSubquery;
 
-    for node in traverse(tree.walk(), Order::Pre) {
+impl Rule for CompareTableSuffixWithSubquery {
+    fn id(&self) -> &'static str {
+        "compare_table_suffix_with_subquery"
+    }
+
+    fn check_node(&self, node: Node<'_>, sql: &str, diagnostics: &mut Vec<Diagnostic>) {
         if node.kind() == "where_clause" {
             if let Some(diagnostic) = compared_with_subquery_in_binary_expression(node, sql) {
                 diagnostics.push(diagnostic);
@@ -17,8 +23,6 @@ pub fn check(tree: &Tree, sql: &str) -> Vec<Diagnostic> {
             }
         }
     }
-
-    diagnostics
 }
 
 fn compared_with_subquery_in_binary_expression(n: Node, src: &str) -> Option<Diagnostic> {

@@ -1,9 +1,5 @@
 use bqvalid::diagnostic::Diagnostic;
-use bqvalid::rules::compare_table_suffix_with_subquery;
-use bqvalid::rules::invalid_group_by;
-use bqvalid::rules::unnecessary_order_by;
-use bqvalid::rules::unused_column_in_cte;
-use bqvalid::rules::use_current_date;
+use bqvalid::rules::run_rules;
 use clap::Parser;
 use clap_verbosity_flag::Verbosity;
 use log::debug;
@@ -172,13 +168,7 @@ fn analyse_sql(parser: &mut TsParser, sql: &str) -> Vec<Diagnostic> {
         return Vec::new();
     };
 
-    let mut diagnostics = Vec::new();
-    diagnostics.extend(compare_table_suffix_with_subquery::check(&tree, sql));
-    diagnostics.extend(invalid_group_by::check(&tree, sql));
-    diagnostics.extend(unnecessary_order_by::check(&tree, sql));
-    diagnostics.extend(unused_column_in_cte::check(&tree, sql));
-    diagnostics.extend(use_current_date::check(&tree, sql));
-    diagnostics
+    run_rules(&tree, sql)
 }
 
 #[cfg(test)]
@@ -235,9 +225,7 @@ mod tests {
             .unwrap();
         let tree = parser.parse(&sql, None).unwrap();
 
-        let mut diagnostics = Vec::new();
-        diagnostics.extend(compare_table_suffix_with_subquery::check(&tree, &sql));
-        diagnostics.extend(use_current_date::check(&tree, &sql));
+        let diagnostics = run_rules(&tree, &sql);
         assert!(diagnostics.len() > 1);
     }
 

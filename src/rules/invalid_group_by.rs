@@ -1,26 +1,27 @@
 use std::collections::HashSet;
-use tree_sitter::{Node, Tree};
+use tree_sitter::Node;
 use tree_sitter_traversal::{Order, traverse};
 
 use crate::diagnostic::Diagnostic;
 use crate::rules::helpers::{find_child_of_kind, get_node_text, is_function_name};
+use crate::rules::rule::Rule;
 
-pub fn check(tree: &Tree, sql: &str) -> Vec<Diagnostic> {
-    find_invalid_group_by(tree, sql)
-}
+/// Flags SELECT columns that are neither grouped nor aggregated, which BigQuery
+/// rejects at runtime.
+pub struct InvalidGroupBy;
 
-fn find_invalid_group_by(tree: &Tree, sql: &str) -> Vec<Diagnostic> {
-    let mut diagnostics = Vec::new();
+impl Rule for InvalidGroupBy {
+    fn id(&self) -> &'static str {
+        "invalid_group_by"
+    }
 
-    for node in traverse(tree.walk(), Order::Pre) {
+    fn check_node(&self, node: Node<'_>, sql: &str, diagnostics: &mut Vec<Diagnostic>) {
         if node.kind() == "select"
             && let Some(diags) = check_select(&node, sql)
         {
             diagnostics.extend(diags);
         }
     }
-
-    diagnostics
 }
 
 fn check_select(node: &Node, sql: &str) -> Option<Vec<Diagnostic>> {
@@ -185,7 +186,7 @@ mod tests {
         let sql = fs::read_to_string(format!("./sql/{}", filename)).unwrap();
         let tree = parse_sql(&sql);
 
-        let diagnostics = check(&tree, &sql);
+        let diagnostics = InvalidGroupBy.check(&tree, &sql);
         assert_eq!(
             diagnostics.len(),
             expected_count,
@@ -206,7 +207,7 @@ mod tests {
         let sql = fs::read_to_string(format!("./sql/{}", filename)).unwrap();
         let tree = parse_sql(&sql);
 
-        let diagnostics = check(&tree, &sql);
+        let diagnostics = InvalidGroupBy.check(&tree, &sql);
         assert!(
             diagnostics.is_empty(),
             "Expected no diagnostics for valid GROUP BY in {}",
