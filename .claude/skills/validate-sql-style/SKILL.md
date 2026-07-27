@@ -1,3 +1,8 @@
+---
+name: validate-sql-style
+description: Validate SQL files against the project's coding conventions. Use when a user asks to check or validate the style of SQL files in the repository (typically under sql/). Checks lowercase keywords/identifiers, absence of organization-specific terms, 2-space indentation, trailing newline, and English comments, then reports violations with line numbers.
+---
+
 # Validate SQL Style Skill
 
 This skill validates SQL files in the repository against the project's coding conventions.
