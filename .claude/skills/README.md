@@ -95,7 +95,9 @@ Please validate the SQL style for all files in sql/
 
 ## Developing Skills
 
-When adding a new skill, create a Markdown file in the following format:
+When adding a new skill, create a directory named after the skill and place a
+`SKILL.md` file inside it (i.e. `<skill-name>/SKILL.md`), with the following
+format:
 
 ```markdown
 ---
@@ -108,4 +110,4 @@ description: Brief description of the skill
 Detailed execution steps in Markdown format
 ```
 
-Name the file `<skill-name>.md`.
+The `name` in the front matter must match the directory name.

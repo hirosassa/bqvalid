@@ -1,3 +1,8 @@
+---
+name: fix-unused-column-false-positive
+description: Fix false positives in bqvalid's unused_column_in_cte rule. Use when a user reports that the unused column detection rule incorrectly flags columns that are actually used (e.g. in JOIN, WHERE, GROUP BY, CASE expressions, or via SELECT *). Reproduces the issue with a minimal test case, fixes src/rules/unused_column_in_cte.rs, adds a regression test, and verifies with cargo test/fmt/clippy.
+---
+
 # Fix Unused Column False Positive Skill
 
 This skill fixes false positives in bqvalid's `unused_column_in_cte` rule through the following steps.
