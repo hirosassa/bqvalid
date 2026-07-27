@@ -1,3 +1,4 @@
+pub mod apply_function_to_partition_column;
 pub mod compare_table_suffix_with_subquery;
 pub mod helpers;
 pub mod invalid_group_by;
