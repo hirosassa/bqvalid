@@ -13,11 +13,54 @@ the config file (see
 
 | Rule | Rule ID | Severity |
 | --- | --- | --- |
+| Applying a function to a partition column in a filter | `apply_function_to_partition_column` | Warning |
 | Comparing `_TABLE_SUFFIX` with subquery | `compare_table_suffix_with_subquery` | Warning |
 | Using CURRENT_DATE | `use_current_date` | Warning |
 | Contains unused columns in CTE | `unused_column_in_cte` | Warning |
 | Unnecessary ORDER BY in CTE or subquery | `unnecessary_order_by` | Warning |
 | Invalid GROUP BY usage | `invalid_group_by` | Error |
+
+## Applying a function to a partition column in a filter
+
+Wrapping a partition column in a date/time function or cast inside a `WHERE`
+clause prevents BigQuery from pruning partitions, so the query scans the whole
+table and bytes billed explode. The query still returns correct results, which
+makes this easy to miss in code review — only the bill reveals it.
+
+Because schema information is not available to a static linter, this rule
+targets the date/time transforms that are almost always applied to a partition
+column: the functions `DATE`, `DATETIME`, `TIMESTAMP`, `TIME`, and their
+`*_TRUNC` variants, and casts to `DATE` / `DATETIME` / `TIMESTAMP` / `TIME`.
+Non-date functions such as `UPPER(name)` are left alone.
+
+ref: [BigQuery documentation on querying partitioned tables](https://cloud.google.com/bigquery/docs/querying-partitioned-tables#pruning_limiting_partitions)
+
+### Example
+
+```sql
+-- The DATE() call keeps BigQuery from pruning partitions: full scan.
+select
+  *
+from
+  dataset.table
+where
+  date(created_at) = '2024-01-01'
+```
+
+### Valid use cases
+
+Compare the bare partition column against literals so pruning still applies:
+
+```sql
+-- Range on the raw column: only the matching partition is scanned.
+select
+  *
+from
+  dataset.table
+where
+  created_at >= '2024-01-01'
+  and created_at < '2024-01-02'
+```
 
 ## Comparing `_TABLE_SUFFIX` with subquery
 

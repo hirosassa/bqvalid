@@ -5,6 +5,7 @@ use tree_sitter_traversal::{Order, traverse};
 
 use crate::diagnostic::Diagnostic;
 use crate::rules::{
+    apply_function_to_partition_column::ApplyFunctionToPartitionColumn,
     compare_table_suffix_with_subquery::CompareTableSuffixWithSubquery,
     invalid_group_by::InvalidGroupBy, unnecessary_order_by::UnnecessaryOrderBy,
     unused_column_in_cte::UnusedColumnInCte, use_current_date::UseCurrentDate,
@@ -50,6 +51,7 @@ pub trait Rule {
 /// analysis loop.
 pub fn all_rules() -> Vec<Box<dyn Rule>> {
     vec![
+        Box::new(ApplyFunctionToPartitionColumn),
         Box::new(CompareTableSuffixWithSubquery),
         Box::new(InvalidGroupBy),
         Box::new(UnnecessaryOrderBy),
@@ -112,7 +114,7 @@ mod tests {
     #[test]
     fn all_rules_have_unique_non_empty_ids() {
         let rules = all_rules();
-        assert_eq!(rules.len(), 5, "every rule must be registered");
+        assert_eq!(rules.len(), 6, "every rule must be registered");
 
         let ids: HashSet<&str> = rules.iter().map(|r| r.id()).collect();
         assert_eq!(ids.len(), rules.len(), "rule ids must be unique");
