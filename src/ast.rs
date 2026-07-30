@@ -94,9 +94,9 @@ impl Ast {
     /// no node identity, no field names and no row/column. This constructor
     /// therefore synthesizes the parent links and identity (the arena index),
     /// derives 0-based positions from the byte offsets, and leaves `field_name`
-    /// empty. Nodes ZetaSQL leaves without a byte range (the top-level
-    /// statement/query/select, which begin at byte 0) get a range spanning
-    /// their children.
+    /// empty. Nodes ZetaSQL reports without a byte range (in practice the
+    /// top-level statement/query/select) get a range spanning their located
+    /// children.
     ///
     /// # Errors
     /// Returns the googlesql [`Error`](googlesql::Error) if the WASM call fails
@@ -187,12 +187,39 @@ fn point_at(starts: &[usize], byte: usize) -> Point {
     Point { row, column }
 }
 
+/// The span covering the child ranges that carry a real location, or `None` if
+/// none do.
+///
+/// A child left with the degenerate empty range `0..0` is a subtree ZetaSQL
+/// reported no byte range for (and whose descendants had none either); it
+/// carries no usable location, so it is skipped rather than pulling the span's
+/// start down to byte 0. Since statements begin with a keyword (which ZetaSQL
+/// emits no node for), a genuine range never starts at byte 0, so an exact
+/// `0..0` unambiguously means "locationless".
+fn derive_span<'a>(children: impl Iterator<Item = &'a Range<usize>>) -> Option<Range<usize>> {
+    let mut lo = usize::MAX;
+    let mut hi = 0usize;
+    for range in children {
+        if range.start == 0 && range.end == 0 {
+            continue;
+        }
+        lo = lo.min(range.start);
+        hi = hi.max(range.end);
+    }
+    (lo != usize::MAX).then_some(lo..hi)
+}
+
 /// Recursively add the googlesql `node` (under `parent`) and its subtree to
 /// `nodes`, returning the new node's arena index.
 ///
 /// ZetaSQL nodes are all "named" (there are no anonymous token nodes) and carry
 /// no field names, so `named` is always `true` and `field_name` always `None`.
-/// A node without a byte range gets one spanning its children.
+/// A consequence is that on this backend `named_children()` equals `children()`
+/// and `child_by_field_name()` is always `None` — field-based navigation is
+/// inert until a later phase maps ZetaSQL's typed accessors onto field names.
+///
+/// A node ZetaSQL reports no byte range for gets one spanning its located
+/// children (see [`derive_span`]).
 fn build_googlesql(
     node: &AstNode,
     parent: Option<usize>,
@@ -218,18 +245,14 @@ fn build_googlesql(
         .map(|child| build_googlesql(child, Some(idx), starts, nodes))
         .collect();
 
-    // A rangeless node (the top-level statement/query/select) spans its
+    // A rangeless node (the top-level statement/query/select) spans its located
     // children; compute that only after they are built.
     let derived = if own_range.is_none() {
-        let mut lo = usize::MAX;
-        let mut hi = 0usize;
-        for &child in &children {
-            if let Some(data) = nodes.get(child) {
-                lo = lo.min(data.byte_range.start);
-                hi = hi.max(data.byte_range.end);
-            }
-        }
-        (lo != usize::MAX).then_some(lo..hi)
+        derive_span(
+            children
+                .iter()
+                .filter_map(|&child| nodes.get(child).map(|data| &data.byte_range)),
+        )
     } else {
         None
     };
@@ -534,6 +557,24 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), count, "ids must be unique");
+    }
+
+    #[test]
+    fn derive_span_ignores_locationless_children() {
+        // The span of a rangeless node must cover only its children that carry
+        // a real location. Children with the degenerate empty range `0..0` (a
+        // subtree ZetaSQL reported no range for) must NOT drag the span to
+        // byte 0.
+        let mixed = [0..0, 10..14, 0..0, 20..25];
+        assert_eq!(derive_span(mixed.iter()), Some(10..25));
+
+        // No child carries a location -> no span can be derived.
+        let none = [0..0, 0..0];
+        assert_eq!(derive_span(none.iter()), None);
+
+        // No children at all -> no span.
+        let empty: [Range<usize>; 0] = [];
+        assert_eq!(derive_span(empty.iter()), None);
     }
 }
 
