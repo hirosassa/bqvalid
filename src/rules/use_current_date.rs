@@ -1,4 +1,4 @@
-use tree_sitter::Node;
+use crate::ast::NodeRef;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::helpers::{get_node_text, one_based_start};
@@ -14,14 +14,14 @@ impl Rule for UseCurrentDate {
         RULE_ID
     }
 
-    fn check_node(&self, node: Node<'_>, sql: &str, diagnostics: &mut Vec<Diagnostic>) {
+    fn check_node(&self, node: NodeRef<'_>, sql: &str, diagnostics: &mut Vec<Diagnostic>) {
         if let Some(diagnostic) = current_date_used(node, sql) {
             diagnostics.push(diagnostic);
         }
     }
 }
 
-fn current_date_used(node: Node, src: &str) -> Option<Diagnostic> {
+fn current_date_used(node: NodeRef<'_>, src: &str) -> Option<Diagnostic> {
     let text = get_node_text(&node, src);
 
     if node.kind() == "identifier" && text.eq_ignore_ascii_case("current_date") {

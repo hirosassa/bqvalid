@@ -1,4 +1,4 @@
-use tree_sitter::Node;
+use crate::ast::NodeRef;
 
 use crate::rules::unused_column_in_cte::{context::AnalysisContext, utils, visitor::NodeVisitor};
 
@@ -7,14 +7,15 @@ use crate::rules::unused_column_in_cte::{context::AnalysisContext, utils, visito
 pub struct SelectStarVisitor;
 
 impl NodeVisitor for SelectStarVisitor {
-    fn visit(&self, node: &Node, context: &mut AnalysisContext) {
+    fn visit(&self, node: NodeRef<'_>, context: &mut AnalysisContext) {
         if node.kind() != "select_list" {
             return;
         }
 
         // Check if this select_list contains SELECT *
         let has_select_star = node
-            .children(&mut node.walk())
+            .children()
+            .into_iter()
             .any(|child| child.kind() == "select_all");
 
         if !has_select_star {
@@ -34,13 +35,13 @@ impl NodeVisitor for SelectStarVisitor {
 
         // Only process SELECT * in final SELECT, not in CTEs
         if !in_cte {
-            mark_source_columns_as_used(node, context);
+            mark_source_columns_as_used(&node, context);
         }
     }
 }
 
 /// Mark all columns from source tables as used
-fn mark_source_columns_as_used(select_list: &Node, context: &mut AnalysisContext) {
+fn mark_source_columns_as_used(select_list: &NodeRef<'_>, context: &mut AnalysisContext) {
     let sql = context.sql();
 
     // Find the FROM clause
@@ -73,7 +74,6 @@ fn mark_source_columns_as_used(select_list: &Node, context: &mut AnalysisContext
 mod tests {
     use super::*;
     use crate::rules::helpers::parse_sql;
-    use tree_sitter_traversal::{Order, traverse};
 
     use crate::rules::unused_column_in_cte::visitors::{CteVisitor, SelectVisitor};
 
@@ -81,17 +81,17 @@ mod tests {
     fn test_select_star_visitor() {
         let sql = "WITH cte1 AS (SELECT col1, col2, unused FROM table1) \
                    SELECT * FROM cte1";
-        let tree = parse_sql(sql);
+        let ast = parse_sql(sql);
         let mut context = AnalysisContext::new(sql);
 
         let cte_visitor = CteVisitor;
         let select_star_visitor = SelectStarVisitor;
         let select_visitor = SelectVisitor::new();
 
-        for node in traverse(tree.root_node().walk(), Order::Pre) {
-            cte_visitor.visit(&node, &mut context);
-            select_star_visitor.visit(&node, &mut context);
-            select_visitor.visit(&node, &mut context);
+        for node in ast.pre_order() {
+            cte_visitor.visit(node, &mut context);
+            select_star_visitor.visit(node, &mut context);
+            select_visitor.visit(node, &mut context);
         }
 
         // All columns should be marked as used (final SELECT *)

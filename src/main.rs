@@ -1,3 +1,4 @@
+use bqvalid::ast::Ast;
 use bqvalid::config::{self, Config};
 use bqvalid::diagnostic::Diagnostic;
 use bqvalid::output::{self, FileResult, OutputFormat};
@@ -193,7 +194,8 @@ fn analyse_sql(parser: &mut TsParser, sql: &str, ignore: &HashSet<String>) -> Ve
         return Vec::new();
     };
 
-    run_rules_ignoring(&tree, sql, ignore)
+    let ast = Ast::from_tree_sitter(&tree);
+    run_rules_ignoring(&ast, sql, ignore)
 }
 
 /// Resolve the effective set of ignored rule ids from the config file and CLI.
@@ -292,8 +294,9 @@ where
   )
 ";
         let tree = parser.parse(sql, None).unwrap();
+        let ast = Ast::from_tree_sitter(&tree);
 
-        let diagnostics = run_rules_ignoring(&tree, sql, &HashSet::new());
+        let diagnostics = run_rules_ignoring(&ast, sql, &HashSet::new());
         assert!(diagnostics.len() > 1);
     }
 

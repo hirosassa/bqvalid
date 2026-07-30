@@ -1,5 +1,4 @@
-use tree_sitter::Node;
-use tree_sitter_traversal::{Order, traverse};
+use crate::ast::NodeRef;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::helpers::{get_node_text, one_based_start};
@@ -15,7 +14,7 @@ impl Rule for CompareTableSuffixWithSubquery {
         RULE_ID
     }
 
-    fn check_node(&self, node: Node<'_>, sql: &str, diagnostics: &mut Vec<Diagnostic>) {
+    fn check_node(&self, node: NodeRef<'_>, sql: &str, diagnostics: &mut Vec<Diagnostic>) {
         if node.kind() == "where_clause" {
             if let Some(diagnostic) = compared_with_subquery_in_binary_expression(node, sql) {
                 diagnostics.push(diagnostic);
@@ -27,16 +26,15 @@ impl Rule for CompareTableSuffixWithSubquery {
     }
 }
 
-fn compared_with_subquery_in_binary_expression(n: Node, src: &str) -> Option<Diagnostic> {
-    for node in traverse(n.walk(), Order::Pre) {
+fn compared_with_subquery_in_binary_expression(n: NodeRef<'_>, src: &str) -> Option<Diagnostic> {
+    for node in n.pre_order() {
         let text = get_node_text(&node, src);
 
         if node.kind() == "identifier" && text.eq_ignore_ascii_case("_table_suffix") {
             let Some(parent) = node.parent() else {
                 continue;
             };
-            let mut tc = parent.walk();
-            let Some(right_operand) = parent.children(&mut tc).last() else {
+            let Some(right_operand) = parent.children().into_iter().last() else {
                 continue;
             };
             if parent.kind() == "binary_expression"
@@ -49,8 +47,8 @@ fn compared_with_subquery_in_binary_expression(n: Node, src: &str) -> Option<Dia
     None
 }
 
-fn compared_with_subquery_in_between_expression(n: Node, src: &str) -> Option<Diagnostic> {
-    for node in traverse(n.walk(), Order::Pre) {
+fn compared_with_subquery_in_between_expression(n: NodeRef<'_>, src: &str) -> Option<Diagnostic> {
+    for node in n.pre_order() {
         let text = get_node_text(&node, src);
 
         if node.kind() == "identifier" && text.eq_ignore_ascii_case("_table_suffix") {
@@ -58,8 +56,7 @@ fn compared_with_subquery_in_between_expression(n: Node, src: &str) -> Option<Di
                 continue;
             };
             if parent.kind() == "between_operator" {
-                let mut tc = parent.walk();
-                for c in parent.children(&mut tc) {
+                for c in parent.children() {
                     let Some(first_child) = c.child(0) else {
                         continue;
                     };
@@ -77,7 +74,7 @@ fn compared_with_subquery_in_between_expression(n: Node, src: &str) -> Option<Di
 
 /// Build the full-scan diagnostic pointing at `subquery_node`. Both the binary
 /// and BETWEEN paths report the same problem, so construction lives here.
-fn new_full_scan_warning(subquery_node: &Node) -> Diagnostic {
+fn new_full_scan_warning(subquery_node: &NodeRef<'_>) -> Diagnostic {
     let (row, col) = one_based_start(subquery_node);
     Diagnostic::new(
         RULE_ID,
@@ -109,9 +106,9 @@ select
 from
   dataset.table
 ";
-        let tree = parse_sql(sql);
+        let ast = parse_sql(sql);
 
-        for node in traverse(tree.walk(), Order::Pre) {
+        for node in ast.pre_order() {
             if node.kind() == "where_clause" {
                 assert!(compared_with_subquery_in_binary_expression(node, sql).is_none());
                 assert!(compared_with_subquery_in_between_expression(node, sql).is_none());
@@ -131,9 +128,9 @@ where
     select dt from dates
   )
 ";
-        let tree = parse_sql(sql);
+        let ast = parse_sql(sql);
 
-        for node in traverse(tree.walk(), Order::Pre) {
+        for node in ast.pre_order() {
             if node.kind() == "where_clause" {
                 assert!(compared_with_subquery_in_binary_expression(node, sql).is_some());
             }
@@ -153,9 +150,9 @@ where
   )
   and '2022-06-01'
 ";
-        let tree = parse_sql(sql);
+        let ast = parse_sql(sql);
 
-        for node in traverse(tree.walk(), Order::Pre) {
+        for node in ast.pre_order() {
             if node.kind() == "where_clause" {
                 assert!(compared_with_subquery_in_between_expression(node, sql).is_some());
             }
@@ -175,9 +172,9 @@ where
     select dt from dates
   )
 ";
-        let tree = parse_sql(sql);
+        let ast = parse_sql(sql);
 
-        for node in traverse(tree.walk(), Order::Pre) {
+        for node in ast.pre_order() {
             if node.kind() == "where_clause" {
                 assert!(compared_with_subquery_in_between_expression(node, sql).is_some());
             }
@@ -190,10 +187,10 @@ where
         // clause. On this single-line query the subquery starts at the '('.
         let sql = "SELECT x FROM t WHERE _TABLE_SUFFIX = (SELECT MAX(s) FROM u)";
         let paren_col = sql.find('(').expect("query contains a subquery paren");
-        let tree = parse_sql(sql);
+        let ast = parse_sql(sql);
 
         let mut checked = false;
-        for node in traverse(tree.walk(), Order::Pre) {
+        for node in ast.pre_order() {
             if node.kind() == "where_clause" {
                 let diagnostic = compared_with_subquery_in_binary_expression(node, sql)
                     .expect("subquery comparison should be flagged");
@@ -213,8 +210,8 @@ where
             "SELECT x FROM t WHERE _TABLE_SUFFIX",
             "WHERE _TABLE_SUFFIX = (",
         ] {
-            let tree = parse_sql(sql);
-            for node in traverse(tree.walk(), Order::Pre) {
+            let ast = parse_sql(sql);
+            for node in ast.pre_order() {
                 if node.kind() == "where_clause" {
                     let _ = compared_with_subquery_in_binary_expression(node, sql);
                     let _ = compared_with_subquery_in_between_expression(node, sql);

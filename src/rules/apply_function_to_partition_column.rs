@@ -1,5 +1,4 @@
-use tree_sitter::Node;
-use tree_sitter_traversal::{Order, traverse};
+use crate::ast::NodeRef;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::helpers::{get_node_text, one_based_start};
@@ -36,11 +35,11 @@ impl Rule for ApplyFunctionToPartitionColumn {
         RULE_ID
     }
 
-    fn check_node(&self, node: Node<'_>, sql: &str, diagnostics: &mut Vec<Diagnostic>) {
+    fn check_node(&self, node: NodeRef<'_>, sql: &str, diagnostics: &mut Vec<Diagnostic>) {
         if node.kind() != "where_clause" {
             return;
         }
-        for descendant in traverse(node.walk(), Order::Pre) {
+        for descendant in node.pre_order() {
             let operand = match descendant.kind() {
                 // A comparison's left operand is the first child of the
                 // binary/between node (e.g. `date(col) = '...'`,
@@ -60,7 +59,7 @@ impl Rule for ApplyFunctionToPartitionColumn {
 
 /// Returns the offending `function_call` / `cast_expression` node when `operand`
 /// is a date/time transform wrapped around a column reference, else `None`.
-fn date_time_transform_on_column<'a>(operand: &Node<'a>, sql: &str) -> Option<Node<'a>> {
+fn date_time_transform_on_column<'a>(operand: &NodeRef<'a>, sql: &str) -> Option<NodeRef<'a>> {
     match operand.kind() {
         // `function_call`'s first named child is the function name (also an
         // `identifier`), so skip it when looking for a wrapped column.
@@ -80,7 +79,7 @@ fn date_time_transform_on_column<'a>(operand: &Node<'a>, sql: &str) -> Option<No
 }
 
 /// True when the `function_call`'s name is one of [`DATE_TIME_FUNCTIONS`].
-fn is_date_time_function(func: &Node, sql: &str) -> bool {
+fn is_date_time_function(func: &NodeRef<'_>, sql: &str) -> bool {
     func.named_child(0).is_some_and(|name| {
         name.kind() == "identifier"
             && DATE_TIME_FUNCTIONS
@@ -91,9 +90,8 @@ fn is_date_time_function(func: &Node, sql: &str) -> bool {
 
 /// True when the `cast_expression`'s target type is one of
 /// [`DATE_TIME_CAST_TYPES`], e.g. `cast(col as date)`.
-fn casts_to_date_time(cast: &Node, sql: &str) -> bool {
-    let mut cursor = cast.walk();
-    cast.named_children(&mut cursor).any(|child| {
+fn casts_to_date_time(cast: &NodeRef<'_>, sql: &str) -> bool {
+    cast.named_children().into_iter().any(|child| {
         child.kind() == "type_identifier"
             && DATE_TIME_CAST_TYPES
                 .iter()
@@ -106,13 +104,13 @@ fn casts_to_date_time(cast: &Node, sql: &str) -> bool {
 ///
 /// The transform's own name is an `identifier` too, so it is skipped: a column
 /// reference is an `identifier` that is not the function name.
-fn wraps_column(operand: &Node, sql: &str, skip_first_named_child: bool) -> bool {
+fn wraps_column(operand: &NodeRef<'_>, sql: &str, skip_first_named_child: bool) -> bool {
     let skip_id = if skip_first_named_child {
         operand.named_child(0).map(|n| n.id())
     } else {
         None
     };
-    traverse(operand.walk(), Order::Pre).any(|node| {
+    operand.pre_order().into_iter().any(|node| {
         node.kind() == "identifier"
             && Some(node.id()) != skip_id
             && !get_node_text(&node, sql).is_empty()
@@ -120,7 +118,7 @@ fn wraps_column(operand: &Node, sql: &str, skip_first_named_child: bool) -> bool
 }
 
 /// Build the full-scan diagnostic pointing at the offending transform node.
-fn new_full_scan_warning(node: &Node) -> Diagnostic {
+fn new_full_scan_warning(node: &NodeRef<'_>) -> Diagnostic {
     let (row, col) = one_based_start(node);
     Diagnostic::new(
         RULE_ID,

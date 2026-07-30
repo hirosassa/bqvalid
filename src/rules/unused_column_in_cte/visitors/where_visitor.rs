@@ -1,8 +1,9 @@
 use std::collections::HashMap;
-use tree_sitter::Node;
-use tree_sitter_traversal::{Order, traverse};
 
-use crate::rules::helpers::{find_parent_select, get_node_text, is_function_name};
+use crate::ast::NodeRef;
+use crate::rules::helpers::{
+    find_child_of_kind, find_parent_select, get_node_text, is_function_name,
+};
 use crate::rules::unused_column_in_cte::{
     context::AnalysisContext, models::ColumnInfo, utils, visitor::NodeVisitor,
 };
@@ -11,22 +12,22 @@ use crate::rules::unused_column_in_cte::{
 pub struct WhereVisitor;
 
 impl NodeVisitor for WhereVisitor {
-    fn visit(&self, node: &Node, context: &mut AnalysisContext) {
+    fn visit(&self, node: NodeRef<'_>, context: &mut AnalysisContext) {
         // Process JOIN conditions, WHERE clauses, and GROUP BY
         if matches!(
             node.kind(),
             "join_condition" | "where_clause" | "group_by_clause"
         ) {
-            process_condition_node(node, context);
+            process_condition_node(&node, context);
         } else if node.kind() == "from_clause" {
             // Process UNNEST functions in FROM clause
-            process_unnest_in_from(node, context);
+            process_unnest_in_from(&node, context);
         }
     }
 }
 
 /// Process a condition node and mark column references as used
-fn process_condition_node(node: &Node, context: &mut AnalysisContext) {
+fn process_condition_node(node: &NodeRef<'_>, context: &mut AnalysisContext) {
     let sql = context.sql();
     let (tables, alias_map) = extract_tables_from_parent(node, sql);
     let resolver = utils::TableResolver::new(&tables, &alias_map, &context.cte_columns);
@@ -45,18 +46,19 @@ fn process_condition_node(node: &Node, context: &mut AnalysisContext) {
 }
 
 /// Extract tables from the parent SELECT node
-fn extract_tables_from_parent(node: &Node, sql: &str) -> (Vec<String>, HashMap<String, String>) {
+fn extract_tables_from_parent(
+    node: &NodeRef<'_>,
+    sql: &str,
+) -> (Vec<String>, HashMap<String, String>) {
     if let Some(select_node) = find_parent_select(node) {
-        let from_node = select_node
-            .named_children(&mut select_node.walk())
-            .find(|child| child.kind() == "from_clause");
+        let from_node = find_child_of_kind(&select_node, "from_clause");
         return utils::extract_table(from_node, sql);
     }
     (Vec::new(), HashMap::new())
 }
 
 /// Process UNNEST functions in FROM clause and mark their column arguments as used
-fn process_unnest_in_from(from_node: &Node, context: &mut AnalysisContext) {
+fn process_unnest_in_from(from_node: &NodeRef<'_>, context: &mut AnalysisContext) {
     let sql = context.sql();
     let (tables, alias_map) = utils::extract_table(Some(*from_node), sql);
     let resolver = utils::TableResolver::new(&tables, &alias_map, &context.cte_columns);
@@ -65,10 +67,10 @@ fn process_unnest_in_from(from_node: &Node, context: &mut AnalysisContext) {
     let mut col_refs = Vec::new();
 
     // Find all UNNEST clauses in FROM clause (BigQuery-specific syntax)
-    for child in traverse(from_node.walk(), Order::Pre) {
+    for child in from_node.pre_order() {
         if child.kind() == "unnest_operator" || child.kind() == "unnest_clause" {
             // Extract identifiers from UNNEST - these are the column references
-            for unnest_child in traverse(child.walk(), Order::Pre) {
+            for unnest_child in child.pre_order() {
                 if unnest_child.kind() == "identifier" || unnest_child.kind() == "field" {
                     let column_text = get_node_text(&unnest_child, sql);
                     let table = resolver.resolve_qualified_or(column_text);
@@ -98,13 +100,13 @@ fn process_unnest_in_from(from_node: &Node, context: &mut AnalysisContext) {
 
 /// Extract column references from a condition node
 fn extract_columns_from_condition(
-    node: &Node,
+    node: &NodeRef<'_>,
     sql: &str,
     resolver: &utils::TableResolver,
     columns: &mut Vec<ColumnInfo>,
 ) {
     // Traverse the condition tree to find all column references
-    for child in traverse(node.walk(), Order::Pre) {
+    for child in node.pre_order() {
         if child.kind() == "field" || child.kind() == "identifier" {
             // Skip function names
             if is_function_name(&child) {
@@ -139,7 +141,6 @@ fn extract_columns_from_condition(
 mod tests {
     use super::*;
     use crate::rules::helpers::parse_sql;
-    use tree_sitter_traversal::{Order, traverse};
 
     use crate::rules::unused_column_in_cte::visitors::{CteVisitor, SelectVisitor};
 
@@ -147,7 +148,7 @@ mod tests {
     fn test_where_visitor() {
         let sql = "WITH cte1 AS (SELECT col1, col2, col3 FROM table1) \
                    SELECT col1 FROM cte1 WHERE col2 > 10";
-        let tree = parse_sql(sql);
+        let ast = parse_sql(sql);
         let mut context = AnalysisContext::new(sql);
 
         let cte_visitor = CteVisitor;
@@ -155,10 +156,10 @@ mod tests {
         let where_visitor = WhereVisitor;
 
         // Single pass with all visitors
-        for node in traverse(tree.root_node().walk(), Order::Pre) {
-            cte_visitor.visit(&node, &mut context);
-            select_visitor.visit(&node, &mut context);
-            where_visitor.visit(&node, &mut context);
+        for node in ast.pre_order() {
+            cte_visitor.visit(node, &mut context);
+            select_visitor.visit(node, &mut context);
+            where_visitor.visit(node, &mut context);
         }
 
         // col1 should be marked as used (in SELECT)
@@ -178,17 +179,17 @@ mod tests {
                         cte2 AS (SELECT id, value FROM t2) \
                    SELECT cte1.name, cte2.value FROM cte1 \
                    JOIN cte2 ON cte1.id = cte2.id";
-        let tree = parse_sql(sql);
+        let ast = parse_sql(sql);
         let mut context = AnalysisContext::new(sql);
 
         let cte_visitor = CteVisitor;
         let select_visitor = SelectVisitor::new();
         let where_visitor = WhereVisitor;
 
-        for node in traverse(tree.root_node().walk(), Order::Pre) {
-            cte_visitor.visit(&node, &mut context);
-            select_visitor.visit(&node, &mut context);
-            where_visitor.visit(&node, &mut context);
+        for node in ast.pre_order() {
+            cte_visitor.visit(node, &mut context);
+            select_visitor.visit(node, &mut context);
+            where_visitor.visit(node, &mut context);
         }
 
         // name and value should be marked as used (in SELECT)

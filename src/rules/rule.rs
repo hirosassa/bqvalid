@@ -1,8 +1,6 @@
 use std::collections::HashSet;
 
-use tree_sitter::{Node, Tree};
-use tree_sitter_traversal::{Order, traverse};
-
+use crate::ast::{Ast, NodeRef};
 use crate::diagnostic::Diagnostic;
 use crate::rules::{
     apply_function_to_partition_column::ApplyFunctionToPartitionColumn,
@@ -27,21 +25,21 @@ pub trait Rule {
     /// React to a single node visited during the shared pre-order traversal.
     /// Node-driven rules override this; the default does nothing so tree-driven
     /// rules can ignore it.
-    fn check_node(&self, _node: Node<'_>, _sql: &str, _diagnostics: &mut Vec<Diagnostic>) {}
+    fn check_node(&self, _node: NodeRef<'_>, _sql: &str, _diagnostics: &mut Vec<Diagnostic>) {}
 
     /// React to the whole tree, for rules that cannot be expressed per node.
     /// The default does nothing so node-driven rules can ignore it.
-    fn check_tree(&self, _tree: &Tree, _sql: &str, _diagnostics: &mut Vec<Diagnostic>) {}
+    fn check_tree(&self, _ast: &Ast, _sql: &str, _diagnostics: &mut Vec<Diagnostic>) {}
 
-    /// Run this rule alone over `tree`. Convenience for unit tests and callers
+    /// Run this rule alone over `ast`. Convenience for unit tests and callers
     /// that want a single rule's diagnostics; [`run_rules`] shares one traversal
     /// across every rule instead.
-    fn check(&self, tree: &Tree, sql: &str) -> Vec<Diagnostic> {
+    fn check(&self, ast: &Ast, sql: &str) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
-        for node in traverse(tree.walk(), Order::Pre) {
+        for node in ast.pre_order() {
             self.check_node(node, sql, &mut diagnostics);
         }
-        self.check_tree(tree, sql, &mut diagnostics);
+        self.check_tree(ast, sql, &mut diagnostics);
         diagnostics
     }
 }
@@ -66,9 +64,9 @@ pub fn known_rule_ids() -> HashSet<&'static str> {
     all_rules().iter().map(|r| r.id()).collect()
 }
 
-/// Run every registered rule over `tree`, see [`run_rules_ignoring`].
-pub fn run_rules(tree: &Tree, sql: &str) -> Vec<Diagnostic> {
-    run_rules_ignoring(tree, sql, &HashSet::new())
+/// Run every registered rule over `ast`, see [`run_rules_ignoring`].
+pub fn run_rules(ast: &Ast, sql: &str) -> Vec<Diagnostic> {
+    run_rules_ignoring(ast, sql, &HashSet::new())
 }
 
 /// Run the registered rules over `tree` in a single pre-order traversal,
@@ -78,20 +76,20 @@ pub fn run_rules(tree: &Tree, sql: &str) -> Vec<Diagnostic> {
 /// than each rule walking the whole tree on its own. Tree-driven rules run
 /// afterwards. Diagnostics come out in traversal order for the node-driven
 /// rules, followed by the tree-driven ones.
-pub fn run_rules_ignoring(tree: &Tree, sql: &str, ignore: &HashSet<String>) -> Vec<Diagnostic> {
+pub fn run_rules_ignoring(ast: &Ast, sql: &str, ignore: &HashSet<String>) -> Vec<Diagnostic> {
     let rules: Vec<Box<dyn Rule>> = all_rules()
         .into_iter()
         .filter(|rule| !ignore.contains(rule.id()))
         .collect();
     let mut diagnostics = Vec::new();
 
-    for node in traverse(tree.walk(), Order::Pre) {
+    for node in ast.pre_order() {
         for rule in &rules {
             rule.check_node(node, sql, &mut diagnostics);
         }
     }
     for rule in &rules {
-        rule.check_tree(tree, sql, &mut diagnostics);
+        rule.check_tree(ast, sql, &mut diagnostics);
     }
 
     diagnostics
