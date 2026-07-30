@@ -144,12 +144,8 @@ fn check_select_expression(
 
 fn is_alias(node: &NodeRef<'_>) -> bool {
     // Check if this identifier is part of an as_alias
-    if let Some(parent) = node.parent()
-        && parent.kind() == "as_alias"
-    {
-        return true;
-    }
-    false
+    node.parent()
+        .is_some_and(|parent| parent.kind() == "as_alias")
 }
 
 fn is_in_aggregate_function(node: &NodeRef<'_>, sql: &str) -> bool {

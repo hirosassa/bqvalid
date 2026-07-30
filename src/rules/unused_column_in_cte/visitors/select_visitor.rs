@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
 use crate::ast::NodeRef;
-use crate::rules::helpers::{get_node_text, is_function_name};
+use crate::rules::helpers::{find_child_of_kind, get_node_text, is_function_name};
 use crate::rules::unused_column_in_cte::{
     context::AnalysisContext, models::ColumnInfo, utils, visitor::NodeVisitor,
 };
@@ -35,11 +35,7 @@ impl NodeVisitor for SelectVisitor {
             let is_final_select = self.is_final_select(&node);
 
             // Find the select_list within the SELECT
-            if let Some(select_list) = node
-                .named_children()
-                .into_iter()
-                .find(|child| child.kind() == "select_list")
-            {
+            if let Some(select_list) = find_child_of_kind(&node, "select_list") {
                 if is_final_select {
                     // For final SELECT: extract and mark columns through dependency tracing
                     let final_columns = extract_final_select_columns(&select_list, sql, context);

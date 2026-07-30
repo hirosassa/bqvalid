@@ -94,13 +94,9 @@ impl<'a> TableResolver<'a> {
         alias_map: &'a HashMap<String, String>,
         cte_columns: &HashMap<String, Vec<ColumnInfo>>,
     ) -> Self {
-        let mut is_cte = std::collections::HashSet::new();
+        let is_cte: std::collections::HashSet<String> = cte_columns.keys().cloned().collect();
         let mut unqualified: HashMap<String, &str> = HashMap::new();
         let mut wildcard = None;
-
-        for key in cte_columns.keys() {
-            is_cte.insert(key.clone());
-        }
 
         for table in tables {
             match cte_columns.get(table) {

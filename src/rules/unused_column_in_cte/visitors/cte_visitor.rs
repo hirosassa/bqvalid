@@ -1,5 +1,5 @@
 use crate::ast::{NodeRef, Point};
-use crate::rules::helpers::get_node_text;
+use crate::rules::helpers::{find_child_of_kind, get_node_text};
 use crate::rules::unused_column_in_cte::{
     context::AnalysisContext, models::ColumnInfo, utils, visitor::NodeVisitor,
 };
@@ -24,21 +24,14 @@ impl NodeVisitor for CteVisitor {
 
         if let Some(query) = query_node {
             let select_node = if query.kind() == "query_expr" {
-                query
-                    .named_children()
-                    .into_iter()
-                    .find(|c| c.kind() == "select")
+                find_child_of_kind(&query, "select")
             } else {
                 Some(query)
             };
 
             if let Some(sel) = select_node {
                 // Find the select_list within this SELECT
-                if let Some(select_list) = sel
-                    .named_children()
-                    .into_iter()
-                    .find(|child| child.kind() == "select_list")
-                {
+                if let Some(select_list) = find_child_of_kind(&sel, "select_list") {
                     let columns = extract_columns(&select_list, sql, &context.cte_columns);
                     context.add_cte(cte_name, columns);
                 }

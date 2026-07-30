@@ -25,7 +25,7 @@ impl Rule for UnnecessaryOrderBy {
 }
 
 fn check_unnecessary_order_by_in_scope(scope_node: &NodeRef<'_>, _sql: &str) -> Option<Diagnostic> {
-    let query_expr = find_query_expr(scope_node)?;
+    let query_expr = find_child_of_kind(scope_node, "query_expr")?;
 
     if !has_child_of_kind(&query_expr, "limit_clause")
         && let Some(order_by_node) = find_child_of_kind(&query_expr, "order_by_clause")
@@ -41,12 +41,6 @@ fn check_unnecessary_order_by_in_scope(scope_node: &NodeRef<'_>, _sql: &str) -> 
     }
 
     None
-}
-
-fn find_query_expr<'a>(node: &NodeRef<'a>) -> Option<NodeRef<'a>> {
-    node.named_children()
-        .into_iter()
-        .find(|child| child.kind() == "query_expr")
 }
 
 #[cfg(test)]

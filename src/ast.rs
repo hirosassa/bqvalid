@@ -178,13 +178,13 @@ impl<'a> NodeRef<'a> {
     /// Start byte offset in the source.
     #[must_use]
     pub fn start_byte(&self) -> usize {
-        self.byte_range().start
+        self.data().map_or(0, |d| d.byte_range.start)
     }
 
     /// End byte offset in the source.
     #[must_use]
     pub fn end_byte(&self) -> usize {
-        self.byte_range().end
+        self.data().map_or(0, |d| d.byte_range.end)
     }
 
     /// The node's 0-based start position.

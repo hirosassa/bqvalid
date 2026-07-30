@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
 use crate::ast::NodeRef;
-use crate::rules::helpers::{find_parent_select, get_node_text, is_function_name};
+use crate::rules::helpers::{
+    find_child_of_kind, find_parent_select, get_node_text, is_function_name,
+};
 use crate::rules::unused_column_in_cte::{
     context::AnalysisContext, models::ColumnInfo, utils, visitor::NodeVisitor,
 };
@@ -49,10 +51,7 @@ fn extract_tables_from_parent(
     sql: &str,
 ) -> (Vec<String>, HashMap<String, String>) {
     if let Some(select_node) = find_parent_select(node) {
-        let from_node = select_node
-            .named_children()
-            .into_iter()
-            .find(|child| child.kind() == "from_clause");
+        let from_node = find_child_of_kind(&select_node, "from_clause");
         return utils::extract_table(from_node, sql);
     }
     (Vec::new(), HashMap::new())

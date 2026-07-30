@@ -38,12 +38,10 @@ fn find_tables_for_pivot(
             return utils::extract_table(Some(parent), sql);
         }
         // Check if this is inside a SELECT that has a FROM clause
-        if parent.kind() == "select" {
-            for child in parent.named_children() {
-                if child.kind() == "from_clause" {
-                    return utils::extract_table(Some(child), sql);
-                }
-            }
+        if parent.kind() == "select"
+            && let Some(from) = crate::rules::helpers::find_child_of_kind(&parent, "from_clause")
+        {
+            return utils::extract_table(Some(from), sql);
         }
         current = parent.parent();
     }

@@ -1,6 +1,6 @@
 use crate::ast::NodeRef;
 
-use crate::rules::helpers::find_parent_select;
+use crate::rules::helpers::{find_child_of_kind, find_parent_select};
 use crate::rules::unused_column_in_cte::{context::AnalysisContext, utils, visitor::NodeVisitor};
 
 /// Visitor for processing QUALIFY clauses
@@ -21,10 +21,7 @@ impl NodeVisitor for QualifyVisitor {
             return;
         };
 
-        let from_node = select_node
-            .named_children()
-            .into_iter()
-            .find(|child| child.kind() == "from_clause");
+        let from_node = find_child_of_kind(&select_node, "from_clause");
         let (tables, alias_map) = utils::extract_table(from_node, sql);
         let resolver = utils::TableResolver::new(&tables, &alias_map, &context.cte_columns);
 
