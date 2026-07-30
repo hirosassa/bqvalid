@@ -6,9 +6,7 @@ mod utils;
 mod visitor;
 mod visitors;
 
-use tree_sitter::Tree;
-use tree_sitter_traversal::{Order, traverse};
-
+use crate::ast::Ast;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rule::Rule;
 
@@ -32,12 +30,12 @@ impl Rule for UnusedColumnInCte {
         RULE_ID
     }
 
-    fn check_tree(&self, tree: &Tree, sql: &str, diagnostics: &mut Vec<Diagnostic>) {
-        diagnostics.extend(check(tree, sql));
+    fn check_tree(&self, ast: &Ast, sql: &str, diagnostics: &mut Vec<Diagnostic>) {
+        diagnostics.extend(check(ast, sql));
     }
 }
 
-pub fn check(tree: &Tree, sql: &str) -> Vec<Diagnostic> {
+pub fn check(ast: &Ast, sql: &str) -> Vec<Diagnostic> {
     let mut context = AnalysisContext::new(sql);
 
     let cte_visitor = CteVisitor;
@@ -50,13 +48,13 @@ pub fn check(tree: &Tree, sql: &str) -> Vec<Diagnostic> {
     // Single-pass traversal with all visitors
     // Note: DistinctVisitor removed - DISTINCT doesn't make all CTE columns used,
     // only the columns in the SELECT clause are affected by DISTINCT
-    for node in traverse(tree.root_node().walk(), Order::Pre) {
-        cte_visitor.visit(&node, &mut context);
-        select_star_visitor.visit(&node, &mut context);
-        select_visitor.visit(&node, &mut context);
-        where_visitor.visit(&node, &mut context);
-        qualify_visitor.visit(&node, &mut context);
-        pivot_visitor.visit(&node, &mut context);
+    for node in ast.pre_order() {
+        cte_visitor.visit(node, &mut context);
+        select_star_visitor.visit(node, &mut context);
+        select_visitor.visit(node, &mut context);
+        where_visitor.visit(node, &mut context);
+        qualify_visitor.visit(node, &mut context);
+        pivot_visitor.visit(node, &mut context);
     }
 
     context

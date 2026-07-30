@@ -1,4 +1,4 @@
-use tree_sitter::Node;
+use crate::ast::NodeRef;
 
 use crate::rules::unused_column_in_cte::{context::AnalysisContext, utils, visitor::NodeVisitor};
 
@@ -7,7 +7,7 @@ use crate::rules::unused_column_in_cte::{context::AnalysisContext, utils, visito
 pub struct PivotVisitor;
 
 impl NodeVisitor for PivotVisitor {
-    fn visit(&self, node: &Node, context: &mut AnalysisContext) {
+    fn visit(&self, node: NodeRef<'_>, context: &mut AnalysisContext) {
         // Look for PIVOT operator
         if node.kind() != "pivot_operator" {
             return;
@@ -17,17 +17,17 @@ impl NodeVisitor for PivotVisitor {
 
         // Get the FROM clause to know which tables are available
         // Find the parent FROM clause
-        let (tables, alias_map) = find_tables_for_pivot(node, sql);
+        let (tables, alias_map) = find_tables_for_pivot(&node, sql);
         let resolver = utils::TableResolver::new(&tables, &alias_map, &context.cte_columns);
 
         // Extract all field/identifier references from the PIVOT clause
-        utils::extract_and_mark_fields(node, sql, &resolver, context);
+        utils::extract_and_mark_fields(&node, sql, &resolver, context);
     }
 }
 
 /// Find tables available in the context of a PIVOT operator
 fn find_tables_for_pivot(
-    pivot_node: &Node,
+    pivot_node: &NodeRef<'_>,
     sql: &str,
 ) -> (Vec<String>, std::collections::HashMap<String, String>) {
     // Walk up to find the FROM clause or table reference
@@ -39,7 +39,7 @@ fn find_tables_for_pivot(
         }
         // Check if this is inside a SELECT that has a FROM clause
         if parent.kind() == "select" {
-            for child in parent.named_children(&mut parent.walk()) {
+            for child in parent.named_children() {
                 if child.kind() == "from_clause" {
                     return utils::extract_table(Some(child), sql);
                 }
@@ -62,7 +62,6 @@ fn find_tables_for_pivot(
 mod tests {
     use super::*;
     use crate::rules::helpers::parse_sql;
-    use tree_sitter_traversal::{Order, traverse};
 
     use crate::rules::unused_column_in_cte::visitors::{CteVisitor, SelectVisitor};
 
@@ -70,17 +69,17 @@ mod tests {
     fn test_pivot_visitor() {
         let sql = "WITH raw_data AS (SELECT category, month, value, unused FROM table1) \
                    SELECT category FROM raw_data PIVOT(sum(value) for month in ('Jan' as jan))";
-        let tree = parse_sql(sql);
+        let ast = parse_sql(sql);
         let mut context = AnalysisContext::new(sql);
 
         let cte_visitor = CteVisitor;
         let select_visitor = SelectVisitor::new();
         let pivot_visitor = PivotVisitor;
 
-        for node in traverse(tree.root_node().walk(), Order::Pre) {
-            cte_visitor.visit(&node, &mut context);
-            select_visitor.visit(&node, &mut context);
-            pivot_visitor.visit(&node, &mut context);
+        for node in ast.pre_order() {
+            cte_visitor.visit(node, &mut context);
+            select_visitor.visit(node, &mut context);
+            pivot_visitor.visit(node, &mut context);
         }
 
         // value and month should be marked as used (PIVOT clause)

@@ -1,5 +1,4 @@
-use tree_sitter::Node;
-
+use crate::ast::{NodeRef, Point};
 use crate::rules::helpers::get_node_text;
 use crate::rules::unused_column_in_cte::{
     context::AnalysisContext, models::ColumnInfo, utils, visitor::NodeVisitor,
@@ -9,23 +8,25 @@ use crate::rules::unused_column_in_cte::{
 pub struct CteVisitor;
 
 impl NodeVisitor for CteVisitor {
-    fn visit(&self, node: &Node, context: &mut AnalysisContext) {
+    fn visit(&self, node: NodeRef<'_>, context: &mut AnalysisContext) {
         if node.kind() != "cte" {
             return;
         }
 
         let sql = context.sql();
-        let cte_name = utils::get_cte_name(node, sql).to_string();
+        let cte_name = utils::get_cte_name(&node, sql).to_string();
 
         // Find the SELECT or query_expr that defines this CTE
         let query_node = node
-            .named_children(&mut node.walk())
+            .named_children()
+            .into_iter()
             .find(|child| child.kind() == "select" || child.kind() == "query_expr");
 
         if let Some(query) = query_node {
             let select_node = if query.kind() == "query_expr" {
                 query
-                    .named_children(&mut query.walk())
+                    .named_children()
+                    .into_iter()
                     .find(|c| c.kind() == "select")
             } else {
                 Some(query)
@@ -34,7 +35,8 @@ impl NodeVisitor for CteVisitor {
             if let Some(sel) = select_node {
                 // Find the select_list within this SELECT
                 if let Some(select_list) = sel
-                    .named_children(&mut sel.walk())
+                    .named_children()
+                    .into_iter()
                     .find(|child| child.kind() == "select_list")
                 {
                     let columns = extract_columns(&select_list, sql, &context.cte_columns);
@@ -50,7 +52,7 @@ impl NodeVisitor for CteVisitor {
 /// Callers always pass the CTE's `select_list`, so this handles that node
 /// directly rather than recursing.
 fn extract_columns(
-    node: &Node,
+    node: &NodeRef<'_>,
     sql: &str,
     cte_columns: &std::collections::HashMap<String, Vec<ColumnInfo>>,
 ) -> Vec<ColumnInfo> {
@@ -64,7 +66,7 @@ fn extract_columns(
     let (tables, alias_map) = utils::extract_table(from, sql);
     let resolver = utils::TableResolver::new(&tables, &alias_map, cte_columns);
 
-    for child in node.children(&mut node.walk()) {
+    for child in node.children() {
         if child.kind() == "select_expression" {
             let column_info = extract_column_info_from_select_expression(&child, sql, &resolver);
             columns.push(column_info);
@@ -79,13 +81,14 @@ fn extract_columns(
 
 /// Extract column information from a select_expression node
 fn extract_column_info_from_select_expression(
-    select_expr: &Node,
+    select_expr: &NodeRef<'_>,
     sql: &str,
     resolver: &utils::TableResolver,
 ) -> ColumnInfo {
     // Check if there's an as_alias child
     let as_alias_node = select_expr
-        .children(&mut select_expr.walk())
+        .children()
+        .into_iter()
         .find(|n| n.kind() == "as_alias");
 
     // Extract column information (with or without alias)
@@ -108,7 +111,7 @@ fn extract_column_info_from_select_expression(
 
 /// Extract column name information when there is no alias
 fn extract_column_name_without_alias(
-    select_expr: &Node,
+    select_expr: &NodeRef<'_>,
     sql: &str,
 ) -> (String, String, Option<String>) {
     let expr = get_node_text(select_expr, sql).to_string();
@@ -123,13 +126,14 @@ fn extract_column_name_without_alias(
 
 /// Extract alias information from an as_alias node
 fn extract_alias_info(
-    alias_node: &Node,
-    select_expr: &Node,
+    alias_node: &NodeRef<'_>,
+    select_expr: &NodeRef<'_>,
     sql: &str,
 ) -> (String, String, Option<String>) {
     // Extract alias name from as_alias node (last named child)
     let alias_name = alias_node
-        .named_children(&mut alias_node.walk())
+        .named_children()
+        .into_iter()
         .last()
         .map(|n| get_node_text(&n, sql).to_string())
         .unwrap_or_default();
@@ -147,7 +151,7 @@ fn extract_alias_info(
 
 /// Expand SELECT * into individual columns
 fn expand_asterisk(
-    position: tree_sitter::Point,
+    position: Point,
     cte_names: &[String],
     cte_columns: &std::collections::HashMap<String, Vec<ColumnInfo>>,
 ) -> Vec<ColumnInfo> {
@@ -178,19 +182,18 @@ fn expand_asterisk(
 mod tests {
     use super::*;
     use crate::rules::helpers::parse_sql;
-    use tree_sitter_traversal::{Order, traverse};
 
     #[test]
     fn test_cte_visitor() {
         let sql = "WITH cte1 AS (SELECT col1, col2 FROM table1) SELECT * FROM cte1";
-        let tree = parse_sql(sql);
+        let ast = parse_sql(sql);
         let mut context = AnalysisContext::new(sql);
 
         let visitor = CteVisitor;
 
         // Visit all nodes
-        for node in traverse(tree.root_node().walk(), Order::Pre) {
-            visitor.visit(&node, &mut context);
+        for node in ast.pre_order() {
+            visitor.visit(node, &mut context);
         }
 
         assert!(context.has_cte("cte1"));
@@ -203,13 +206,13 @@ mod tests {
     #[test]
     fn test_cte_visitor_with_aliases() {
         let sql = "WITH cte1 AS (SELECT col1 AS alias1, col2 AS alias2, col3 FROM table1) SELECT * FROM cte1";
-        let tree = parse_sql(sql);
+        let ast = parse_sql(sql);
         let mut context = AnalysisContext::new(sql);
 
         let visitor = CteVisitor;
 
-        for node in traverse(tree.root_node().walk(), Order::Pre) {
-            visitor.visit(&node, &mut context);
+        for node in ast.pre_order() {
+            visitor.visit(node, &mut context);
         }
 
         assert!(context.has_cte("cte1"));
@@ -227,13 +230,13 @@ mod tests {
         let sql = "WITH cte1 AS (SELECT col1, col2, col3 FROM table1), \
                    cte2 AS (SELECT * FROM cte1) \
                    SELECT * FROM cte2";
-        let tree = parse_sql(sql);
+        let ast = parse_sql(sql);
         let mut context = AnalysisContext::new(sql);
 
         let visitor = CteVisitor;
 
-        for node in traverse(tree.root_node().walk(), Order::Pre) {
-            visitor.visit(&node, &mut context);
+        for node in ast.pre_order() {
+            visitor.visit(node, &mut context);
         }
 
         // cte1 should have 3 columns
@@ -257,13 +260,13 @@ mod tests {
                    cte2 AS (SELECT user_id, email FROM contacts), \
                    cte3 AS (SELECT order_id, amount FROM orders) \
                    SELECT * FROM cte1";
-        let tree = parse_sql(sql);
+        let ast = parse_sql(sql);
         let mut context = AnalysisContext::new(sql);
 
         let visitor = CteVisitor;
 
-        for node in traverse(tree.root_node().walk(), Order::Pre) {
-            visitor.visit(&node, &mut context);
+        for node in ast.pre_order() {
+            visitor.visit(node, &mut context);
         }
 
         // All three CTEs should be collected
@@ -290,13 +293,13 @@ mod tests {
     #[test]
     fn test_cte_visitor_with_qualified_names() {
         let sql = "WITH cte1 AS (SELECT t.col1, t.col2 FROM table1 t) SELECT * FROM cte1";
-        let tree = parse_sql(sql);
+        let ast = parse_sql(sql);
         let mut context = AnalysisContext::new(sql);
 
         let visitor = CteVisitor;
 
-        for node in traverse(tree.root_node().walk(), Order::Pre) {
-            visitor.visit(&node, &mut context);
+        for node in ast.pre_order() {
+            visitor.visit(node, &mut context);
         }
 
         assert!(context.has_cte("cte1"));
@@ -312,13 +315,13 @@ mod tests {
         let sql = "WITH cte1 AS (SELECT col1, col2 FROM table1), \
                    cte2 AS (SELECT *, col3 FROM cte1, table2) \
                    SELECT * FROM cte2";
-        let tree = parse_sql(sql);
+        let ast = parse_sql(sql);
         let mut context = AnalysisContext::new(sql);
 
         let visitor = CteVisitor;
 
-        for node in traverse(tree.root_node().walk(), Order::Pre) {
-            visitor.visit(&node, &mut context);
+        for node in ast.pre_order() {
+            visitor.visit(node, &mut context);
         }
 
         assert!(context.has_cte("cte1"));

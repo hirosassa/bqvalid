@@ -1,7 +1,6 @@
 use std::collections::HashMap;
-use tree_sitter::Node;
-use tree_sitter_traversal::{Order, traverse};
 
+use crate::ast::NodeRef;
 use crate::rules::helpers::{get_node_text, is_function_name};
 
 use super::context::AnalysisContext;
@@ -12,7 +11,7 @@ use super::models::ColumnInfo;
 /// A well-formed CTE always has an `alias_name` field. On a malformed tree
 /// where it is missing we return an empty name rather than panicking; an empty
 /// CTE name simply fails to match downstream lookups.
-pub fn get_cte_name<'a>(cte_node: &Node, sql: &'a str) -> &'a str {
+pub fn get_cte_name<'a>(cte_node: &NodeRef<'_>, sql: &'a str) -> &'a str {
     cte_node
         .child_by_field_name("alias_name")
         .map_or("", |alias_node| get_node_text(&alias_node, sql))
@@ -31,12 +30,15 @@ pub fn extract_table_name(table_ref: &str) -> &str {
 }
 
 /// Extract tables and aliases from a FROM clause
-pub fn extract_table(from: Option<Node>, sql: &str) -> (Vec<String>, HashMap<String, String>) {
+pub fn extract_table(
+    from: Option<NodeRef<'_>>,
+    sql: &str,
+) -> (Vec<String>, HashMap<String, String>) {
     let mut tables = Vec::new();
     let mut alias_map = HashMap::new();
 
     if let Some(from_node) = from {
-        for n in traverse(from_node.walk(), Order::Pre) {
+        for n in from_node.pre_order() {
             if n.kind() == "from_item"
                 && let Some(first_child) = n.named_child(0)
                 && first_child.kind() == "identifier"
@@ -45,9 +47,9 @@ pub fn extract_table(from: Option<Node>, sql: &str) -> (Vec<String>, HashMap<Str
                 tables.push(table_name.clone());
 
                 // Check if there's an alias
-                for child in n.children(&mut n.walk()) {
+                for child in n.children() {
                     if child.kind() == "as_alias" {
-                        if let Some(alias_node) = child.named_children(&mut child.walk()).last() {
+                        if let Some(alias_node) = child.named_children().into_iter().last() {
                             let alias_name = get_node_text(&alias_node, sql).to_string();
                             alias_map.insert(alias_name, table_name.clone());
                         }
@@ -179,7 +181,7 @@ impl<'a> TableResolver<'a> {
 /// Recursively extract all field/identifier references and mark them as used
 /// This function processes field, identifier, and input_column nodes
 pub fn extract_and_mark_fields(
-    node: &Node,
+    node: &NodeRef<'_>,
     sql: &str,
     resolver: &TableResolver,
     context: &mut AnalysisContext,
@@ -203,7 +205,7 @@ pub fn extract_and_mark_fields(
     }
 
     // Recursively process children
-    for child in node.children(&mut node.walk()) {
+    for child in node.children() {
         extract_and_mark_fields(&child, sql, resolver, context);
     }
 }
@@ -397,7 +399,7 @@ mod tests {
     fn get_cte_name_is_empty_for_a_node_without_alias() {
         // A non-CTE node has no `alias_name` field: we must get "" and not panic.
         let sql = "SELECT 1";
-        let tree = parse_sql(sql);
-        assert_eq!(get_cte_name(&tree.root_node(), sql), "");
+        let ast = parse_sql(sql);
+        assert_eq!(get_cte_name(&ast.root(), sql), "");
     }
 }

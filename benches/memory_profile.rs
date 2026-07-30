@@ -13,12 +13,14 @@ use std::fs;
 use tree_sitter::Parser as TsParser;
 use tree_sitter_sql_bigquery::language;
 
+use bqvalid::ast::Ast;
 use bqvalid::rules::unused_column_in_cte;
 
-fn parse_sql(sql: &str) -> tree_sitter::Tree {
+fn parse_sql(sql: &str) -> Ast {
     let mut parser = TsParser::new();
     parser.set_language(&language()).unwrap();
-    parser.parse(sql, None).unwrap()
+    let tree = parser.parse(sql, None).unwrap();
+    Ast::from_tree_sitter(&tree)
 }
 
 fn run_check(name: &str, path: &str) {
@@ -26,8 +28,8 @@ fn run_check(name: &str, path: &str) {
 
     let sql = fs::read_to_string(path).unwrap_or_else(|_| panic!("Failed to read {}", path));
 
-    let tree = parse_sql(&sql);
-    let diagnostics = unused_column_in_cte::check(&tree, &sql);
+    let ast = parse_sql(&sql);
+    let diagnostics = unused_column_in_cte::check(&ast, &sql);
 
     if diagnostics.is_empty() {
         println!("No unused columns found");

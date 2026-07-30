@@ -1,8 +1,7 @@
 use std::collections::HashSet;
 use std::sync::LazyLock;
-use tree_sitter::Node;
-use tree_sitter_traversal::{Order, traverse};
 
+use crate::ast::NodeRef;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::helpers::{find_child_of_kind, get_node_text, is_function_name, one_based_start};
 use crate::rules::rule::Rule;
@@ -65,7 +64,7 @@ impl Rule for InvalidGroupBy {
         RULE_ID
     }
 
-    fn check_node(&self, node: Node<'_>, sql: &str, diagnostics: &mut Vec<Diagnostic>) {
+    fn check_node(&self, node: NodeRef<'_>, sql: &str, diagnostics: &mut Vec<Diagnostic>) {
         if node.kind() == "select"
             && let Some(diags) = check_select(&node, sql)
         {
@@ -74,13 +73,13 @@ impl Rule for InvalidGroupBy {
     }
 }
 
-fn check_select(node: &Node, sql: &str) -> Option<Vec<Diagnostic>> {
+fn check_select(node: &NodeRef<'_>, sql: &str) -> Option<Vec<Diagnostic>> {
     let group_by_columns = extract_group_by_columns(node, sql)?;
 
     let select_list = find_child_of_kind(node, "select_list")?;
 
     let mut diagnostics = Vec::new();
-    for child in select_list.named_children(&mut select_list.walk()) {
+    for child in select_list.named_children() {
         if child.kind() == "select_expression"
             && let Some(diag) = check_select_expression(&child, sql, &group_by_columns)
         {
@@ -95,11 +94,11 @@ fn check_select(node: &Node, sql: &str) -> Option<Vec<Diagnostic>> {
     }
 }
 
-fn extract_group_by_columns(select_node: &Node, sql: &str) -> Option<HashSet<String>> {
+fn extract_group_by_columns(select_node: &NodeRef<'_>, sql: &str) -> Option<HashSet<String>> {
     let group_by_node = find_child_of_kind(select_node, "group_by_clause")?;
     let mut columns = HashSet::new();
 
-    for node in traverse(group_by_node.walk(), Order::Pre) {
+    for node in group_by_node.pre_order() {
         if node.kind() == "identifier" {
             let text = get_node_text(&node, sql);
             columns.insert(text.to_string());
@@ -110,12 +109,12 @@ fn extract_group_by_columns(select_node: &Node, sql: &str) -> Option<HashSet<Str
 }
 
 fn check_select_expression(
-    expr_node: &Node,
+    expr_node: &NodeRef<'_>,
     sql: &str,
     group_by_columns: &HashSet<String>,
 ) -> Option<Diagnostic> {
     // Check if this expression contains an identifier that's not in an aggregate function
-    for node in traverse(expr_node.walk(), Order::Pre) {
+    for node in expr_node.pre_order() {
         if node.kind() == "identifier"
             && !is_alias(&node)
             && !is_function_name(&node)
@@ -143,7 +142,7 @@ fn check_select_expression(
     None
 }
 
-fn is_alias(node: &Node) -> bool {
+fn is_alias(node: &NodeRef<'_>) -> bool {
     // Check if this identifier is part of an as_alias
     if let Some(parent) = node.parent()
         && parent.kind() == "as_alias"
@@ -153,7 +152,7 @@ fn is_alias(node: &Node) -> bool {
     false
 }
 
-fn is_in_aggregate_function(node: &Node, sql: &str) -> bool {
+fn is_in_aggregate_function(node: &NodeRef<'_>, sql: &str) -> bool {
     let mut current = node.parent();
 
     while let Some(parent) = current {
@@ -348,10 +347,10 @@ GROUP BY t1.user_id, t2.category;
     #[test]
     fn test_is_alias() {
         let sql = "SELECT col1 as alias1 FROM table1";
-        let tree = parse_sql(sql);
+        let ast = parse_sql(sql);
 
         // Find the identifier "alias1"
-        for node in traverse(tree.walk(), Order::Pre) {
+        for node in ast.pre_order() {
             if node.kind() == "identifier" {
                 let text = get_node_text(&node, sql);
                 if text == "alias1" {
@@ -369,10 +368,10 @@ GROUP BY t1.user_id, t2.category;
     #[test]
     fn test_is_function_name() {
         let sql = "SELECT COUNT(col1) FROM table1";
-        let tree = parse_sql(sql);
+        let ast = parse_sql(sql);
 
         // Check that function names are correctly identified
-        for node in traverse(tree.walk(), Order::Pre) {
+        for node in ast.pre_order() {
             if node.kind() == "identifier" {
                 let text = get_node_text(&node, sql);
                 if text == "COUNT" {
@@ -393,9 +392,9 @@ GROUP BY t1.user_id, t2.category;
     #[test]
     fn test_is_in_aggregate_function() {
         let sql = "SELECT COUNT(col1), col2 FROM table1 GROUP BY col2";
-        let tree = parse_sql(sql);
+        let ast = parse_sql(sql);
 
-        for node in traverse(tree.walk(), Order::Pre) {
+        for node in ast.pre_order() {
             if node.kind() == "identifier" {
                 let text = get_node_text(&node, sql);
                 if text == "col1" {

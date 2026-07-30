@@ -1,4 +1,4 @@
-use tree_sitter::Node;
+use crate::ast::NodeRef;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::helpers::{find_child_of_kind, has_child_of_kind, one_based_start};
@@ -15,7 +15,7 @@ impl Rule for UnnecessaryOrderBy {
         RULE_ID
     }
 
-    fn check_node(&self, node: Node<'_>, sql: &str, diagnostics: &mut Vec<Diagnostic>) {
+    fn check_node(&self, node: NodeRef<'_>, sql: &str, diagnostics: &mut Vec<Diagnostic>) {
         if matches!(node.kind(), "cte" | "select_subexpression")
             && let Some(diagnostic) = check_unnecessary_order_by_in_scope(&node, sql)
         {
@@ -24,7 +24,7 @@ impl Rule for UnnecessaryOrderBy {
     }
 }
 
-fn check_unnecessary_order_by_in_scope(scope_node: &Node, _sql: &str) -> Option<Diagnostic> {
+fn check_unnecessary_order_by_in_scope(scope_node: &NodeRef<'_>, _sql: &str) -> Option<Diagnostic> {
     let query_expr = find_query_expr(scope_node)?;
 
     if !has_child_of_kind(&query_expr, "limit_clause")
@@ -43,9 +43,10 @@ fn check_unnecessary_order_by_in_scope(scope_node: &Node, _sql: &str) -> Option<
     None
 }
 
-fn find_query_expr<'a>(node: &'a Node<'a>) -> Option<Node<'a>> {
-    node.named_children(&mut node.walk())
-        .find(|&child| child.kind() == "query_expr")
+fn find_query_expr<'a>(node: &NodeRef<'a>) -> Option<NodeRef<'a>> {
+    node.named_children()
+        .into_iter()
+        .find(|child| child.kind() == "query_expr")
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
-use tree_sitter::Node;
 
+use crate::ast::NodeRef;
 use crate::rules::helpers::{get_node_text, is_function_name};
 use crate::rules::unused_column_in_cte::{
     context::AnalysisContext, models::ColumnInfo, utils, visitor::NodeVisitor,
@@ -15,7 +15,7 @@ impl SelectVisitor {
     }
 
     /// Check if we're in the final SELECT (not inside a CTE)
-    fn is_final_select(&self, node: &Node) -> bool {
+    fn is_final_select(&self, node: &NodeRef<'_>) -> bool {
         // Check if this SELECT is inside a CTE
         let mut current = node.parent();
         while let Some(parent) = current {
@@ -29,14 +29,15 @@ impl SelectVisitor {
 }
 
 impl NodeVisitor for SelectVisitor {
-    fn visit(&self, node: &Node, context: &mut AnalysisContext) {
+    fn visit(&self, node: NodeRef<'_>, context: &mut AnalysisContext) {
         if node.kind() == "select" {
             let sql = context.sql();
-            let is_final_select = self.is_final_select(node);
+            let is_final_select = self.is_final_select(&node);
 
             // Find the select_list within the SELECT
             if let Some(select_list) = node
-                .named_children(&mut node.walk())
+                .named_children()
+                .into_iter()
                 .find(|child| child.kind() == "select_list")
             {
                 if is_final_select {
@@ -45,7 +46,7 @@ impl NodeVisitor for SelectVisitor {
                     mark_used_columns(context, final_columns);
                 } else {
                     // For CTE SELECT: extract column references from expressions (e.g., function arguments)
-                    extract_and_mark_expression_columns(&select_list, node, sql, context);
+                    extract_and_mark_expression_columns(&select_list, &node, sql, context);
                 }
             }
         }
@@ -61,8 +62,8 @@ impl Default for SelectVisitor {
 /// Extract column references from CTE SELECT expressions and mark them as used
 /// This handles columns used in function arguments, window functions, etc.
 fn extract_and_mark_expression_columns(
-    select_list: &Node,
-    select_node: &Node,
+    select_list: &NodeRef<'_>,
+    select_node: &NodeRef<'_>,
     sql: &str,
     context: &mut AnalysisContext,
 ) {
@@ -78,7 +79,7 @@ fn extract_and_mark_expression_columns(
     let resolver = utils::TableResolver::new(&tables, &alias_map, &context.cte_columns);
 
     // Process each select_expression
-    for child in select_list.children(&mut select_list.walk()) {
+    for child in select_list.children() {
         if child.kind() == "select_expression" {
             // Extract all field references from the expression (including nested ones in function calls)
             extract_field_references_from_expression(&child, sql, &resolver, context);
@@ -87,7 +88,7 @@ fn extract_and_mark_expression_columns(
 }
 
 /// Find the CTE name that contains this SELECT node
-fn find_parent_cte_name(select_node: &Node, sql: &str) -> String {
+fn find_parent_cte_name(select_node: &NodeRef<'_>, sql: &str) -> String {
     let mut current = select_node.parent();
     while let Some(parent) = current {
         if parent.kind() == "cte" {
@@ -105,7 +106,7 @@ fn find_parent_cte_name(select_node: &Node, sql: &str) -> String {
 /// Recursively extract all field references from an expression
 /// This handles: direct references, function arguments, window functions, OVER clauses, etc.
 fn extract_field_references_from_expression(
-    node: &Node,
+    node: &NodeRef<'_>,
     sql: &str,
     resolver: &utils::TableResolver,
     context: &mut AnalysisContext,
@@ -128,7 +129,7 @@ fn extract_field_references_from_expression(
     }
 
     // Recursively process children
-    for child in node.children(&mut node.walk()) {
+    for child in node.children() {
         extract_field_references_from_expression(&child, sql, resolver, context);
     }
 }
@@ -136,7 +137,7 @@ fn extract_field_references_from_expression(
 /// Extract columns from final SELECT
 /// This extracts both simple column references and nested field references (e.g., in functions)
 fn extract_final_select_columns(
-    select_list: &Node,
+    select_list: &NodeRef<'_>,
     sql: &str,
     context: &AnalysisContext,
 ) -> Vec<ColumnInfo> {
@@ -145,15 +146,13 @@ fn extract_final_select_columns(
     let (tables, alias_map) = utils::extract_table(from, sql);
     let resolver = utils::TableResolver::new(&tables, &alias_map, &context.cte_columns);
 
-    for child in select_list.children(&mut select_list.walk()) {
+    for child in select_list.children() {
         if child.kind() == "select_expression" {
             // Strategy: First try to get the direct field reference,
             // then recursively find all field nodes (for function arguments, etc.)
 
             // Check if this has a direct field child (simple column reference)
-            let has_direct_field = child
-                .children(&mut child.walk())
-                .any(|c| c.kind() == "field");
+            let has_direct_field = child.children().into_iter().any(|c| c.kind() == "field");
 
             if !has_direct_field {
                 // Fallback: treat the whole expression text as a column reference
@@ -199,7 +198,7 @@ fn extract_final_select_columns(
 
 /// Recursively extract all 'field' nodes from an AST subtree
 fn extract_all_fields_into_vec(
-    node: &Node,
+    node: &NodeRef<'_>,
     sql: &str,
     resolver: &utils::TableResolver,
     columns: &mut Vec<ColumnInfo>,
@@ -230,7 +229,7 @@ fn extract_all_fields_into_vec(
     }
 
     // Recursively process all children
-    for child in node.children(&mut node.walk()) {
+    for child in node.children() {
         extract_all_fields_into_vec(&child, sql, resolver, columns);
     }
 }
@@ -295,27 +294,26 @@ fn mark_used_columns(context: &mut AnalysisContext, final_columns: Vec<ColumnInf
 mod tests {
     use super::*;
     use crate::rules::helpers::parse_sql;
-    use tree_sitter_traversal::{Order, traverse};
 
     #[test]
     fn test_select_visitor() {
         use crate::rules::unused_column_in_cte::visitors::CteVisitor;
 
         let sql = "WITH cte1 AS (SELECT col1, col2, col3 FROM table1) SELECT col1, col2 FROM cte1";
-        let tree = parse_sql(sql);
+        let ast = parse_sql(sql);
         let mut context = AnalysisContext::new(sql);
 
         let cte_visitor = CteVisitor;
         let select_visitor = SelectVisitor::new();
 
         // First pass: collect CTEs
-        for node in traverse(tree.root_node().walk(), Order::Pre) {
-            cte_visitor.visit(&node, &mut context);
+        for node in ast.pre_order() {
+            cte_visitor.visit(node, &mut context);
         }
 
         // Second pass: mark usage
-        for node in traverse(tree.root_node().walk(), Order::Pre) {
-            select_visitor.visit(&node, &mut context);
+        for node in ast.pre_order() {
+            select_visitor.visit(node, &mut context);
         }
 
         // Check that col1 and col2 are marked as used
