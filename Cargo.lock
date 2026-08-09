@@ -997,9 +997,9 @@ checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
 name = "googlesql"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25a5a23ab278f8ddea485996a47cb5076e991d7043b493c61444f077b7c4c879"
+checksum = "f6477c35e504c4aaf3fc579b49fc961cfe3e2df4334aa72549e9c818266a09b4"
 dependencies = [
  "sha2",
  "thiserror 2.0.19",
