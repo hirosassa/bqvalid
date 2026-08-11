@@ -9,26 +9,22 @@
     reason = "benchmark code"
 )]
 
+use googlesql::Module;
 use std::fs;
-use tree_sitter::Parser as TsParser;
-use tree_sitter_sql_bigquery::language;
 
 use bqvalid::ast::Ast;
 use bqvalid::rules::unused_column_in_cte;
 
-fn parse_sql(sql: &str) -> Ast {
-    let mut parser = TsParser::new();
-    parser.set_language(&language()).unwrap();
-    let tree = parser.parse(sql, None).unwrap();
-    Ast::from_tree_sitter(&tree)
+fn parse_sql(module: &mut Module, sql: &str) -> Ast {
+    Ast::from_googlesql(module, sql).expect("googlesql parses the sql")
 }
 
-fn run_check(name: &str, path: &str) {
+fn run_check(module: &mut Module, name: &str, path: &str) {
     println!("\n=== Running memory profile for: {} ===", name);
 
     let sql = fs::read_to_string(path).unwrap_or_else(|_| panic!("Failed to read {}", path));
 
-    let ast = parse_sql(&sql);
+    let ast = parse_sql(module, &sql);
     let diagnostics = unused_column_in_cte::check(&ast, &sql);
 
     if diagnostics.is_empty() {
@@ -46,9 +42,10 @@ fn main() {
 
     println!("Starting memory profiling...");
 
-    run_check("small", "./benches/fixtures/bench_small.sql");
-    run_check("medium", "./benches/fixtures/bench_medium.sql");
-    run_check("large", "./benches/fixtures/bench_large.sql");
+    let mut module = Module::new_native_ffi().expect("googlesql module builds");
+    run_check(&mut module, "small", "./benches/fixtures/bench_small.sql");
+    run_check(&mut module, "medium", "./benches/fixtures/bench_medium.sql");
+    run_check(&mut module, "large", "./benches/fixtures/bench_large.sql");
 
     println!("\n=== Memory profiling complete ===");
     println!("Results saved to dhat-heap.json");

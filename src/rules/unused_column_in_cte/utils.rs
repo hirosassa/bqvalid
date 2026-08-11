@@ -8,13 +8,26 @@ use super::models::ColumnInfo;
 
 /// Extract CTE name from a CTE node.
 ///
-/// A well-formed CTE always has an `alias_name` field. On a malformed tree
-/// where it is missing we return an empty name rather than panicking; an empty
-/// CTE name simply fails to match downstream lookups.
+/// On googlesql an `ASTAliasedQuery`'s first child is the CTE name identifier.
+/// On a malformed tree where it is missing we return an empty name rather than
+/// panicking; an empty CTE name simply fails to match downstream lookups.
 pub fn get_cte_name<'a>(cte_node: &NodeRef<'_>, sql: &'a str) -> &'a str {
-    cte_node
-        .child_by_field_name("alias_name")
-        .map_or("", |alias_node| get_node_text(&alias_node, sql))
+    if cte_node.kind() == "ASTAliasedQuery"
+        && let Some(name_node) = cte_node.child(0)
+    {
+        return get_node_text(&name_node, sql);
+    }
+    ""
+}
+
+/// True when a select-list child represents `*`.
+///
+/// googlesql wraps the `ASTStar` in an `ASTSelectColumn`, so the star is one
+/// level deeper. This hides that nesting for the select-list scanners.
+pub fn is_star_select_item(child: &NodeRef<'_>) -> bool {
+    child.kind() == "ASTStar"
+        || (child.kind() == "ASTSelectColumn"
+            && child.children().into_iter().any(|c| c.kind() == "ASTStar"))
 }
 
 /// Extract column name from a potentially qualified column reference
@@ -39,16 +52,19 @@ pub fn extract_table(
 
     if let Some(from_node) = from {
         for n in from_node.pre_order() {
-            if n.kind() == "from_item"
+            // A table reference: `ASTTablePathExpression` on googlesql. Its first
+            // named child names the table (an `ASTPathExpression`); UNNEST/subquery
+            // items whose first child is not are skipped.
+            if n.kind() == "ASTTablePathExpression"
                 && let Some(first_child) = n.named_child(0)
-                && first_child.kind() == "identifier"
+                && first_child.kind() == "ASTPathExpression"
             {
                 let table_name = get_node_text(&first_child, sql).to_string();
                 tables.push(table_name.clone());
 
-                // Check if there's an alias
+                // Check if there's an alias (`ASTAlias`).
                 for child in n.children() {
-                    if child.kind() == "as_alias" {
+                    if child.kind() == "ASTAlias" {
                         if let Some(alias_node) = child.named_children().into_iter().last() {
                             let alias_name = get_node_text(&alias_node, sql).to_string();
                             alias_map.insert(alias_name, table_name.clone());
@@ -182,8 +198,9 @@ pub fn extract_and_mark_fields(
     resolver: &TableResolver,
     context: &mut AnalysisContext,
 ) {
-    // Process current node if it's a field, identifier, or input_column
-    if node.kind() == "field" || node.kind() == "identifier" || node.kind() == "input_column" {
+    // Process current node if it's a column reference: an `ASTPathExpression`
+    // (which carries the whole possibly-qualified name as its text) on googlesql.
+    if node.kind() == "ASTPathExpression" {
         // Skip function names
         if is_function_name(node) {
             return;

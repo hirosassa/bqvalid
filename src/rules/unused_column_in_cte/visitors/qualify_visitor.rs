@@ -11,7 +11,7 @@ impl NodeVisitor for QualifyVisitor {
     fn visit(&self, node: NodeRef<'_>, context: &mut AnalysisContext) {
         // Look for QUALIFY clause
         // BigQuery's QUALIFY is used after SELECT to filter window function results
-        if node.kind() != "qualify_clause" {
+        if node.kind() != "ASTQualify" {
             return;
         }
 
@@ -21,7 +21,7 @@ impl NodeVisitor for QualifyVisitor {
             return;
         };
 
-        let from_node = find_child_of_kind(&select_node, "from_clause");
+        let from_node = find_child_of_kind(&select_node, "ASTFromClause");
         let (tables, alias_map) = utils::extract_table(from_node, sql);
         let resolver = utils::TableResolver::new(&tables, &alias_map, &context.cte_columns);
 

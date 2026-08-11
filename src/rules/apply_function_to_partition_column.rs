@@ -36,7 +36,7 @@ impl Rule for ApplyFunctionToPartitionColumn {
     }
 
     fn check_node(&self, node: NodeRef<'_>, sql: &str, diagnostics: &mut Vec<Diagnostic>) {
-        if node.kind() != "where_clause" {
+        if node.kind() != "ASTWhereClause" {
             return;
         }
         for descendant in node.pre_order() {
@@ -44,7 +44,7 @@ impl Rule for ApplyFunctionToPartitionColumn {
                 // A comparison's left operand is the first child of the
                 // binary/between node (e.g. `date(col) = '...'`,
                 // `date(col) between '...' and '...'`).
-                "binary_expression" | "between_operator" => descendant.child(0),
+                "ASTBinaryExpression" | "ASTBetweenExpression" => descendant.child(0),
                 _ => continue,
             };
             let Some(operand) = operand else {
@@ -61,15 +61,16 @@ impl Rule for ApplyFunctionToPartitionColumn {
 /// is a date/time transform wrapped around a column reference, else `None`.
 fn date_time_transform_on_column<'a>(operand: &NodeRef<'a>, sql: &str) -> Option<NodeRef<'a>> {
     match operand.kind() {
-        // `function_call`'s first named child is the function name (also an
-        // `identifier`), so skip it when looking for a wrapped column.
-        "function_call"
+        // A function call's first named child is the function name (an
+        // `ASTPathExpression`), so skip it when looking for a wrapped column.
+        "ASTFunctionCall"
             if is_date_time_function(operand, sql) && wraps_column(operand, sql, true) =>
         {
             Some(*operand)
         }
-        // `cast_expression`'s first named child is the operand itself, so keep it.
-        "cast_expression"
+        // A cast's operand is a child too, so keep it; the target type is skipped
+        // inside `wraps_column`.
+        "ASTCastExpression"
             if casts_to_date_time(operand, sql) && wraps_column(operand, sql, false) =>
         {
             Some(*operand)
@@ -78,21 +79,23 @@ fn date_time_transform_on_column<'a>(operand: &NodeRef<'a>, sql: &str) -> Option
     }
 }
 
-/// True when the `function_call`'s name is one of [`DATE_TIME_FUNCTIONS`].
+/// True when the function-call node's name is one of [`DATE_TIME_FUNCTIONS`].
+///
+/// The name node is an `ASTPathExpression` (wrapping the identifier, same text).
 fn is_date_time_function(func: &NodeRef<'_>, sql: &str) -> bool {
     func.named_child(0).is_some_and(|name| {
-        name.kind() == "identifier"
+        name.kind() == "ASTPathExpression"
             && DATE_TIME_FUNCTIONS
                 .iter()
                 .any(|f| f.eq_ignore_ascii_case(get_node_text(&name, sql)))
     })
 }
 
-/// True when the `cast_expression`'s target type is one of
-/// [`DATE_TIME_CAST_TYPES`], e.g. `cast(col as date)`.
+/// True when the cast's target type is one of [`DATE_TIME_CAST_TYPES`], e.g.
+/// `cast(col as date)`. The type node is an `ASTSimpleType` on googlesql.
 fn casts_to_date_time(cast: &NodeRef<'_>, sql: &str) -> bool {
     cast.named_children().into_iter().any(|child| {
-        child.kind() == "type_identifier"
+        child.kind() == "ASTSimpleType"
             && DATE_TIME_CAST_TYPES
                 .iter()
                 .any(|t| t.eq_ignore_ascii_case(get_node_text(&child, sql)))
@@ -102,17 +105,25 @@ fn casts_to_date_time(cast: &NodeRef<'_>, sql: &str) -> bool {
 /// True when the transform is applied to a column reference rather than only
 /// literals, e.g. `date(created_at)` (flagged) vs `date('2024-01-01')` (not).
 ///
-/// The transform's own name is an `identifier` too, so it is skipped: a column
-/// reference is an `identifier` that is not the function name.
+/// A column reference is an `ASTIdentifier` that is neither the transform's own
+/// name nor part of a type. On googlesql both the function name and the cast
+/// target type are themselves `ASTIdentifier`s, so their subtrees are excluded
+/// to avoid mistaking them for a column.
 fn wraps_column(operand: &NodeRef<'_>, sql: &str, skip_first_named_child: bool) -> bool {
-    let skip_id = if skip_first_named_child {
-        operand.named_child(0).map(|n| n.id())
-    } else {
-        None
-    };
+    let mut skip: Vec<usize> = Vec::new();
+    if skip_first_named_child && let Some(name) = operand.named_child(0) {
+        skip.extend(name.pre_order().into_iter().map(|n| n.id()));
+    }
+    for node in operand.pre_order() {
+        // A type node (`cast(col AS date)`) wraps its own identifier on
+        // googlesql; exclude the whole type subtree so it is not read as a column.
+        if node.kind() == "ASTSimpleType" {
+            skip.extend(node.pre_order().into_iter().map(|n| n.id()));
+        }
+    }
     operand.pre_order().into_iter().any(|node| {
-        node.kind() == "identifier"
-            && Some(node.id()) != skip_id
+        node.kind() == "ASTIdentifier"
+            && !skip.contains(&node.id())
             && !get_node_text(&node, sql).is_empty()
     })
 }
@@ -232,11 +243,13 @@ mod tests {
     }
 
     #[test]
-    fn does_not_panic_on_malformed_where_clause() {
+    fn does_not_panic_on_non_comparison_where_shapes() {
+        // WHERE clauses that are not a simple binary/between comparison must not
+        // panic the node navigation (and must not be flagged).
         for sql in [
-            "SELECT x FROM t WHERE DATE(",
-            "SELECT x FROM t WHERE DATE(created_at) =",
-            "WHERE DATE(created_at)",
+            "SELECT x FROM t WHERE is_active",
+            "SELECT x FROM t WHERE created_at IN ('2024-01-01', '2024-01-02')",
+            "SELECT x FROM t WHERE DATE(created_at) IS NOT NULL",
         ] {
             let _ = run_rule(&ApplyFunctionToPartitionColumn, sql);
         }

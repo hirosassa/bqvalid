@@ -8,8 +8,8 @@ pub struct PivotVisitor;
 
 impl NodeVisitor for PivotVisitor {
     fn visit(&self, node: NodeRef<'_>, context: &mut AnalysisContext) {
-        // Look for PIVOT operator
-        if node.kind() != "pivot_operator" {
+        // Look for PIVOT operator (`ASTPivotClause`)
+        if node.kind() != "ASTPivotClause" {
             return;
         }
 
@@ -34,12 +34,12 @@ fn find_tables_for_pivot(
     let mut current = pivot_node.parent();
     while let Some(parent) = current {
         // Check if this is a from_clause
-        if parent.kind() == "from_clause" {
+        if parent.kind() == "ASTFromClause" {
             return utils::extract_table(Some(parent), sql);
         }
         // Check if this is inside a SELECT that has a FROM clause
-        if parent.kind() == "select"
-            && let Some(from) = crate::rules::helpers::find_child_of_kind(&parent, "from_clause")
+        if parent.kind() == "ASTSelect"
+            && let Some(from) = crate::rules::helpers::find_child_of_kind(&parent, "ASTFromClause")
         {
             return utils::extract_table(Some(from), sql);
         }

@@ -51,11 +51,11 @@ pub fn has_child_of_kind(node: &NodeRef<'_>, kind: &str) -> bool {
         .any(|child| child.kind() == kind)
 }
 
-/// Find the nearest parent node with kind "select"
+/// Find the nearest parent SELECT node (`ASTSelect`).
 pub fn find_parent_select<'a>(node: &NodeRef<'a>) -> Option<NodeRef<'a>> {
     let mut current = node.parent();
     while let Some(parent) = current {
-        if parent.kind() == "select" {
+        if parent.kind() == "ASTSelect" {
             return Some(parent);
         }
         current = parent.parent();
@@ -63,22 +63,38 @@ pub fn find_parent_select<'a>(node: &NodeRef<'a>) -> Option<NodeRef<'a>> {
     None
 }
 
-/// Check if a node is a function name (the name part of a function_call)
+/// Check if a node is a function name (the name part of a function call).
+///
+/// On googlesql the name identifier is wrapped in an `ASTPathExpression` that is
+/// the first child of the `ASTFunctionCall`, so the parent is the path
+/// expression rather than the call itself.
 pub fn is_function_name(node: &NodeRef<'_>) -> bool {
-    if let Some(parent) = node.parent()
-        && parent.kind() == "function_call"
-    {
-        if let Some(func_node) = parent.child_by_field_name("function") {
-            return func_node.id() == node.id();
-        }
-        if let Some(first_child) = parent.child(0) {
-            return first_child.id() == node.id();
-        }
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    match parent.kind() {
+        // Name identifier: `ASTFunctionCall -> ASTPathExpression(name) ->
+        // ASTIdentifier` (this node is the identifier).
+        "ASTPathExpression" => parent.parent().is_some_and(|grandparent| {
+            grandparent.kind() == "ASTFunctionCall"
+                && grandparent
+                    .child(0)
+                    .is_some_and(|first| first.id() == parent.id())
+        }),
+        // Name path expression itself: it is the first child of the
+        // `ASTFunctionCall`. (Rules that navigate column references match the
+        // path expression rather than the inner identifier, so this arm skips
+        // the function name in that representation.)
+        "ASTFunctionCall" => parent.child(0).is_some_and(|first| first.id() == node.id()),
+        _ => false,
     }
-    false
 }
 
-/// Parse SQL string into a neutral [`crate::ast::Ast`] (test helper).
+/// Parse `sql` into a neutral [`crate::ast::Ast`] via the googlesql (ZetaSQL)
+/// backend (test helper).
+///
+/// Building a `Module` links the prebuilt ZetaSQL shared library, so keep tests
+/// focused rather than parsing the same SQL many times.
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -87,13 +103,10 @@ pub fn is_function_name(node: &NodeRef<'_>) -> bool {
     reason = "test code"
 )]
 pub fn parse_sql(sql: &str) -> crate::ast::Ast {
-    use tree_sitter::Parser as TsParser;
-    use tree_sitter_sql_bigquery::language;
+    use googlesql::Module;
 
-    let mut parser = TsParser::new();
-    parser.set_language(&language()).unwrap();
-    let tree = parser.parse(sql, None).unwrap();
-    crate::ast::Ast::from_tree_sitter(&tree)
+    let mut module = Module::new_native_ffi().expect("googlesql module builds");
+    crate::ast::Ast::from_googlesql(&mut module, sql).expect("googlesql parses the sql")
 }
 
 /// Parse `sql` and run a single rule over it, returning its diagnostics.
@@ -123,27 +136,28 @@ mod tests {
     use super::*;
     use crate::ast::NodeRef;
 
-    /// The first identifier node in `sql`, for tests that need a concrete node.
-    fn first_identifier(ast: &crate::ast::Ast) -> Option<NodeRef<'_>> {
+    /// The `col1` column-reference node in `sql`, for tests that need a concrete
+    /// node with a known byte range. On googlesql a column reference is an
+    /// `ASTPathExpression` whose text is the (possibly qualified) name.
+    fn col1_ref<'a>(ast: &'a crate::ast::Ast, sql: &str) -> Option<NodeRef<'a>> {
         ast.pre_order()
             .into_iter()
-            .find(|node| node.kind() == "identifier")
+            .find(|node| node.kind() == "ASTPathExpression" && get_node_text(node, sql) == "col1")
     }
 
     #[test]
     fn test_get_node_text() {
         let sql = "SELECT col1 FROM table1";
         let ast = parse_sql(sql);
-        let node = first_identifier(&ast).expect("Should find at least one identifier");
-        let text = get_node_text(&node, sql);
-        assert!(text == "col1" || text == "table1" || text == "SELECT");
+        let node = col1_ref(&ast, sql).expect("Should find the col1 reference");
+        assert_eq!(get_node_text(&node, sql), "col1");
     }
 
     #[test]
     fn try_get_node_text_returns_some_on_valid_source() {
         let sql = "SELECT col1 FROM t";
         let ast = parse_sql(sql);
-        let node = first_identifier(&ast).expect("expected to find the col1 identifier");
+        let node = col1_ref(&ast, sql).expect("expected to find the col1 reference");
         assert_eq!(try_get_node_text(&node, sql), Some("col1"));
     }
 
@@ -155,7 +169,7 @@ mod tests {
         // instead of silently producing an empty string (a hidden false negative).
         let sql = "SELECT col1 FROM t";
         let ast = parse_sql(sql);
-        let node = first_identifier(&ast).expect("expected to find the col1 identifier");
+        let node = col1_ref(&ast, sql).expect("expected to find the col1 reference");
         // "col1" occupies bytes 7..11 in `sql`. Build a same-or-longer valid
         // string in which byte 10 is the first byte of a 3-byte character, so
         // that slicing 7..11 cuts it and produces invalid UTF-8.
@@ -171,22 +185,18 @@ mod tests {
         // (logged) failure path, so downstream comparisons simply miss.
         let sql = "SELECT col1 FROM t";
         let ast = parse_sql(sql);
-        let node = first_identifier(&ast).expect("expected to find the col1 identifier");
+        let node = col1_ref(&ast, sql).expect("expected to find the col1 reference");
         let mismatched = "abcdefghijあ";
         assert_eq!(get_node_text(&node, mismatched), "");
     }
 
     #[test]
     fn one_based_start_converts_zero_based_position() {
-        // The single identifier starts at row 0, col 7 (0-based); one_based_start
-        // must report it as (1, 8).
+        // The single column reference starts at row 0, col 7 (0-based);
+        // one_based_start must report it as (1, 8).
         let sql = "SELECT col1 FROM t";
         let ast = parse_sql(sql);
-        let node = ast
-            .pre_order()
-            .into_iter()
-            .find(|node| node.kind() == "identifier" && get_node_text(node, sql) == "col1")
-            .expect("expected to find the col1 identifier");
+        let node = col1_ref(&ast, sql).expect("expected to find the col1 reference");
         assert_eq!(one_based_start(&node), (1, 8));
     }
 
@@ -197,12 +207,12 @@ mod tests {
         let select = ast
             .pre_order()
             .into_iter()
-            .find(|node| node.kind() == "select")
+            .find(|node| node.kind() == "ASTSelect")
             .expect("Should find select node");
 
-        // The select node should have a "group_by_clause" child
-        let group_by = find_child_of_kind(&select, "group_by_clause");
-        assert!(group_by.is_some(), "Should find group_by_clause node");
+        // The select node should have an ASTGroupBy child
+        let group_by = find_child_of_kind(&select, "ASTGroupBy");
+        assert!(group_by.is_some(), "Should find ASTGroupBy node");
 
         // Should return None for non-existent kind
         let non_existent = find_child_of_kind(&select, "non_existent_kind");
@@ -216,13 +226,13 @@ mod tests {
         let select = ast
             .pre_order()
             .into_iter()
-            .find(|node| node.kind() == "select")
+            .find(|node| node.kind() == "ASTSelect")
             .expect("Should find select node");
 
-        // The select node should have a "group_by_clause" child
+        // The select node should have an ASTGroupBy child
         assert!(
-            has_child_of_kind(&select, "group_by_clause"),
-            "Should have group_by_clause child"
+            has_child_of_kind(&select, "ASTGroupBy"),
+            "Should have ASTGroupBy child"
         );
 
         // Should return false for non-existent kind

@@ -65,7 +65,7 @@ impl Rule for InvalidGroupBy {
     }
 
     fn check_node(&self, node: NodeRef<'_>, sql: &str, diagnostics: &mut Vec<Diagnostic>) {
-        if node.kind() == "select"
+        if node.kind() == "ASTSelect"
             && let Some(diags) = check_select(&node, sql)
         {
             diagnostics.extend(diags);
@@ -76,11 +76,11 @@ impl Rule for InvalidGroupBy {
 fn check_select(node: &NodeRef<'_>, sql: &str) -> Option<Vec<Diagnostic>> {
     let group_by_columns = extract_group_by_columns(node, sql)?;
 
-    let select_list = find_child_of_kind(node, "select_list")?;
+    let select_list = find_child_of_kind(node, "ASTSelectList")?;
 
     let mut diagnostics = Vec::new();
     for child in select_list.named_children() {
-        if child.kind() == "select_expression"
+        if child.kind() == "ASTSelectColumn"
             && let Some(diag) = check_select_expression(&child, sql, &group_by_columns)
         {
             diagnostics.push(diag);
@@ -95,11 +95,11 @@ fn check_select(node: &NodeRef<'_>, sql: &str) -> Option<Vec<Diagnostic>> {
 }
 
 fn extract_group_by_columns(select_node: &NodeRef<'_>, sql: &str) -> Option<HashSet<String>> {
-    let group_by_node = find_child_of_kind(select_node, "group_by_clause")?;
+    let group_by_node = find_child_of_kind(select_node, "ASTGroupBy")?;
     let mut columns = HashSet::new();
 
     for node in group_by_node.pre_order() {
-        if node.kind() == "identifier" {
+        if node.kind() == "ASTIdentifier" {
             let text = get_node_text(&node, sql);
             columns.insert(text.to_string());
         }
@@ -115,7 +115,7 @@ fn check_select_expression(
 ) -> Option<Diagnostic> {
     // Check if this expression contains an identifier that's not in an aggregate function
     for node in expr_node.pre_order() {
-        if node.kind() == "identifier"
+        if node.kind() == "ASTIdentifier"
             && !is_alias(&node)
             && !is_function_name(&node)
             && !is_in_aggregate_function(&node, sql)
@@ -143,22 +143,23 @@ fn check_select_expression(
 }
 
 fn is_alias(node: &NodeRef<'_>) -> bool {
-    // Check if this identifier is part of an as_alias
+    // Check if this identifier is the alias name (`ASTAlias` on googlesql).
     node.parent()
-        .is_some_and(|parent| parent.kind() == "as_alias")
+        .is_some_and(|parent| parent.kind() == "ASTAlias")
 }
 
 fn is_in_aggregate_function(node: &NodeRef<'_>, sql: &str) -> bool {
     let mut current = node.parent();
 
     while let Some(parent) = current {
-        if parent.kind() == "function_call"
-            && let Some(func_node) = parent.child_by_field_name("function")
-        {
-            let func_name = get_node_text(&func_node, sql);
-
-            if AGGREGATE_FUNCTIONS.contains(func_name.to_uppercase().as_str()) {
-                return true;
+        if parent.kind() == "ASTFunctionCall" {
+            // googlesql has no field names, so the function name is the first
+            // child (an `ASTPathExpression` wrapping the name).
+            if let Some(func_node) = parent.child(0) {
+                let func_name = get_node_text(&func_node, sql);
+                if AGGREGATE_FUNCTIONS.contains(func_name.to_uppercase().as_str()) {
+                    return true;
+                }
             }
         }
         current = parent.parent();
@@ -332,26 +333,46 @@ GROUP BY t1.user_id, t2.category;
 "
     )]
     fn test_valid_group_by(#[case] sql: &str) {
+        // Some cases bundle several independent valid statements; googlesql parses
+        // one statement at a time, so run each `;`-separated statement on its own.
+        for statement in sql.split(';').filter(|s| !s.trim().is_empty()) {
+            let diagnostics = run_rule(&InvalidGroupBy, statement);
+            assert!(
+                diagnostics.is_empty(),
+                "Expected no diagnostics for valid GROUP BY, got {} for: {statement}",
+                diagnostics.len()
+            );
+        }
+    }
+
+    #[test]
+    fn points_at_the_ungrouped_column() {
+        let sql = "SELECT col1, col2, COUNT(*) AS cnt FROM my_table GROUP BY col1";
+        let col2 = sql.find("col2").expect("query selects col2");
         let diagnostics = run_rule(&InvalidGroupBy, sql);
-        assert!(
-            diagnostics.is_empty(),
-            "Expected no diagnostics for valid GROUP BY, got {}",
-            diagnostics.len()
-        );
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].row(), 1);
+        assert_eq!(diagnostics[0].col(), col2 + 1);
     }
 
     #[test]
     fn test_is_alias() {
+        // On googlesql the alias name is an `ASTIdentifier` under an `ASTAlias`,
+        // whereas a column reference's identifier sits under an
+        // `ASTPathExpression`.
         let sql = "SELECT col1 as alias1 FROM table1";
         let ast = parse_sql(sql);
 
-        // Find the identifier "alias1"
+        let mut saw_alias = false;
+        let mut saw_col = false;
         for node in ast.pre_order() {
-            if node.kind() == "identifier" {
+            if node.kind() == "ASTIdentifier" {
                 let text = get_node_text(&node, sql);
                 if text == "alias1" {
+                    saw_alias = true;
                     assert!(is_alias(&node), "alias1 should be recognized as an alias");
                 } else if text == "col1" {
+                    saw_col = true;
                     assert!(
                         !is_alias(&node),
                         "col1 should not be recognized as an alias"
@@ -359,6 +380,7 @@ GROUP BY t1.user_id, t2.category;
                 }
             }
         }
+        assert!(saw_alias && saw_col, "both identifiers must be visited");
     }
 
     #[test]
@@ -367,15 +389,19 @@ GROUP BY t1.user_id, t2.category;
         let ast = parse_sql(sql);
 
         // Check that function names are correctly identified
+        let mut saw_count = false;
+        let mut saw_col = false;
         for node in ast.pre_order() {
-            if node.kind() == "identifier" {
+            if node.kind() == "ASTIdentifier" {
                 let text = get_node_text(&node, sql);
                 if text == "COUNT" {
+                    saw_count = true;
                     assert!(
                         is_function_name(&node),
                         "COUNT should be recognized as a function name"
                     );
                 } else if text == "col1" {
+                    saw_col = true;
                     assert!(
                         !is_function_name(&node),
                         "col1 should not be recognized as a function name"
@@ -383,6 +409,7 @@ GROUP BY t1.user_id, t2.category;
                 }
             }
         }
+        assert!(saw_count && saw_col, "both identifiers must be visited");
     }
 
     #[test]
@@ -390,10 +417,12 @@ GROUP BY t1.user_id, t2.category;
         let sql = "SELECT COUNT(col1), col2 FROM table1 GROUP BY col2";
         let ast = parse_sql(sql);
 
+        let mut saw_col1 = false;
         for node in ast.pre_order() {
-            if node.kind() == "identifier" {
+            if node.kind() == "ASTIdentifier" {
                 let text = get_node_text(&node, sql);
                 if text == "col1" {
+                    saw_col1 = true;
                     assert!(
                         is_in_aggregate_function(&node, sql),
                         "col1 should be recognized as inside aggregate function"
@@ -401,5 +430,6 @@ GROUP BY t1.user_id, t2.category;
                 }
             }
         }
+        assert!(saw_col1, "the col1 identifier must be visited");
     }
 }

@@ -9,29 +9,31 @@ pub struct CteVisitor;
 
 impl NodeVisitor for CteVisitor {
     fn visit(&self, node: NodeRef<'_>, context: &mut AnalysisContext) {
-        if node.kind() != "cte" {
+        // A CTE definition: `ASTAliasedQuery` on googlesql.
+        if node.kind() != "ASTAliasedQuery" {
             return;
         }
 
         let sql = context.sql();
         let cte_name = utils::get_cte_name(&node, sql).to_string();
 
-        // Find the SELECT or query_expr that defines this CTE
+        // Find the SELECT (or the query wrapper around it) that defines this CTE.
+        // googlesql wraps the SELECT in an `ASTQuery`.
         let query_node = node
             .named_children()
             .into_iter()
-            .find(|child| child.kind() == "select" || child.kind() == "query_expr");
+            .find(|child| matches!(child.kind(), "ASTSelect" | "ASTQuery"));
 
         if let Some(query) = query_node {
-            let select_node = if query.kind() == "query_expr" {
-                find_child_of_kind(&query, "select")
+            let select_node = if query.kind() == "ASTQuery" {
+                find_child_of_kind(&query, "ASTSelect")
             } else {
                 Some(query)
             };
 
             if let Some(sel) = select_node {
                 // Find the select_list within this SELECT
-                if let Some(select_list) = find_child_of_kind(&sel, "select_list") {
+                if let Some(select_list) = find_child_of_kind(&sel, "ASTSelectList") {
                     let columns = extract_columns(&select_list, sql, &context.cte_columns);
                     context.add_cte(cte_name, columns);
                 }
@@ -51,7 +53,7 @@ fn extract_columns(
 ) -> Vec<ColumnInfo> {
     let mut columns = Vec::new();
 
-    if node.kind() != "select_list" {
+    if node.kind() != "ASTSelectList" {
         return columns;
     }
 
@@ -60,12 +62,14 @@ fn extract_columns(
     let resolver = utils::TableResolver::new(&tables, &alias_map, cte_columns);
 
     for child in node.children() {
-        if child.kind() == "select_expression" {
-            let column_info = extract_column_info_from_select_expression(&child, sql, &resolver);
-            columns.push(column_info);
-        } else if child.kind() == "select_all" {
+        // The star check comes first: on googlesql a `*` is itself an
+        // `ASTSelectColumn`, which would otherwise match the column branch.
+        if utils::is_star_select_item(&child) {
             let position = child.start_position();
             columns.extend(expand_asterisk(position, &tables, cte_columns));
+        } else if child.kind() == "ASTSelectColumn" {
+            let column_info = extract_column_info_from_select_expression(&child, sql, &resolver);
+            columns.push(column_info);
         }
     }
 
@@ -78,11 +82,11 @@ fn extract_column_info_from_select_expression(
     sql: &str,
     resolver: &utils::TableResolver,
 ) -> ColumnInfo {
-    // Check if there's an as_alias child
+    // Check if there's an alias child (`ASTAlias`)
     let as_alias_node = select_expr
         .children()
         .into_iter()
-        .find(|n| n.kind() == "as_alias");
+        .find(|n| n.kind() == "ASTAlias");
 
     // Extract column information (with or without alias)
     let (column, original_column, source_column) = as_alias_node.map_or_else(

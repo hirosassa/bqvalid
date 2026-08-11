@@ -8,15 +8,16 @@ pub struct SelectStarVisitor;
 
 impl NodeVisitor for SelectStarVisitor {
     fn visit(&self, node: NodeRef<'_>, context: &mut AnalysisContext) {
-        if node.kind() != "select_list" {
+        if node.kind() != "ASTSelectList" {
             return;
         }
 
-        // Check if this select_list contains SELECT *
+        // Check if this select_list contains SELECT * (an `ASTSelectColumn`
+        // wrapping an `ASTStar` on googlesql).
         let has_select_star = node
             .children()
             .into_iter()
-            .any(|child| child.kind() == "select_all");
+            .any(|child| utils::is_star_select_item(&child));
 
         if !has_select_star {
             return;
@@ -26,7 +27,7 @@ impl NodeVisitor for SelectStarVisitor {
         let mut current = node.parent();
         let mut in_cte = false;
         while let Some(parent) = current {
-            if parent.kind() == "cte" {
+            if parent.kind() == "ASTAliasedQuery" {
                 in_cte = true;
                 break;
             }

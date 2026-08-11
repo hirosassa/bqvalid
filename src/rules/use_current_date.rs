@@ -24,7 +24,9 @@ impl Rule for UseCurrentDate {
 fn current_date_used(node: NodeRef<'_>, src: &str) -> Option<Diagnostic> {
     let text = get_node_text(&node, src);
 
-    if node.kind() == "identifier" && text.eq_ignore_ascii_case("current_date") {
+    // The identifier node is `ASTIdentifier` on the googlesql (ZetaSQL) backend.
+    let is_identifier = node.kind() == "ASTIdentifier";
+    if is_identifier && text.eq_ignore_ascii_case("current_date") {
         let (row, col) = one_based_start(&node);
         return Some(Diagnostic::new(
             RULE_ID,

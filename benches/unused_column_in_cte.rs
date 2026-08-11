@@ -7,20 +7,16 @@
 )]
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use googlesql::Module;
 use std::fs;
 use std::hint::black_box;
-use tree_sitter::Parser as TsParser;
-use tree_sitter_sql_bigquery::language;
 
 // Import the rule check function
 use bqvalid::ast::Ast;
 use bqvalid::rules::unused_column_in_cte;
 
-fn parse_sql(sql: &str) -> Ast {
-    let mut parser = TsParser::new();
-    parser.set_language(&language()).unwrap();
-    let tree = parser.parse(sql, None).unwrap();
-    Ast::from_tree_sitter(&tree)
+fn parse_sql(module: &mut Module, sql: &str) -> Ast {
+    Ast::from_googlesql(module, sql).expect("googlesql parses the sql")
 }
 
 fn bench_unused_column_check(c: &mut Criterion) {
@@ -31,10 +27,11 @@ fn bench_unused_column_check(c: &mut Criterion) {
     ];
 
     let mut group = c.benchmark_group("unused_column_in_cte");
+    let mut module = Module::new_native_ffi().expect("googlesql module builds");
 
     for (name, path) in test_cases {
         let sql = fs::read_to_string(path).unwrap_or_else(|_| panic!("Failed to read {}", path));
-        let ast = parse_sql(&sql);
+        let ast = parse_sql(&mut module, &sql);
 
         group.bench_with_input(
             BenchmarkId::new("check", name),
@@ -59,13 +56,14 @@ fn bench_parse_and_check(c: &mut Criterion) {
     ];
 
     let mut group = c.benchmark_group("parse_and_check");
+    let mut module = Module::new_native_ffi().expect("googlesql module builds");
 
     for (name, path) in test_cases {
         let sql = fs::read_to_string(path).unwrap_or_else(|_| panic!("Failed to read {}", path));
 
         group.bench_with_input(BenchmarkId::new("full", name), &sql, |b, sql| {
             b.iter(|| {
-                let ast = parse_sql(black_box(sql));
+                let ast = parse_sql(&mut module, black_box(sql));
                 let result = unused_column_in_cte::check(black_box(&ast), black_box(sql));
                 black_box(result);
             });

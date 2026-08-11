@@ -774,4 +774,56 @@ from
                 .collect::<Vec<_>>()
         );
     }
+
+    /// The whole visitor pipeline must detect unused columns on the googlesql
+    /// (ZetaSQL) backend, exercising each visitor (CTE extraction, final SELECT
+    /// tracing, WHERE, JOIN ON, QUALIFY, PIVOT, UNNEST, SELECT *, aliases, and
+    /// cross-CTE dependency tracing). Cases are single statements because the
+    /// ZetaSQL parser is one statement at a time.
+    #[rstest]
+    // Basic: a CTE column selected by neither the final SELECT nor anything else.
+    #[case("WITH cte1 AS (SELECT col1, col2, unused FROM t) SELECT col1, col2 FROM cte1", vec!["unused"])]
+    // WHERE marks col2 used; col3 stays unused.
+    #[case("WITH cte1 AS (SELECT col1, col2, col3 FROM t) SELECT col1 FROM cte1 WHERE col2 > 10", vec!["col3"])]
+    // JOIN ON marks the id columns used; `unused` stays unused.
+    #[case("WITH cte1 AS (SELECT id, name, unused FROM t1), cte2 AS (SELECT id, value FROM t2) \
+            SELECT cte1.name, cte2.value FROM cte1 JOIN cte2 ON cte1.id = cte2.id", vec!["unused"])]
+    // QUALIFY marks col1 used (window partition); `unused` stays unused.
+    #[case("WITH cte1 AS (SELECT col1, col2, unused FROM t) \
+            SELECT col2 FROM cte1 QUALIFY row_number() over (partition by col1) = 1", vec!["unused"])]
+    // PIVOT marks value/month used; `unused` stays unused.
+    #[case("WITH raw_data AS (SELECT category, month, value, unused FROM t) \
+            SELECT category FROM raw_data PIVOT(sum(value) FOR month IN ('Jan' AS jan))", vec!["unused"])]
+    // Alias + GROUP BY: unique_id is used; column2 and unused_column are not.
+    #[case("WITH cte1 AS (SELECT column1 AS unique_id, column2, unused_column FROM t) \
+            SELECT unique_id, count(*) FROM cte1 GROUP BY unique_id", vec!["column2", "unused_column"])]
+    // Cross-CTE tracing: final uses d2.k1 (-> d1.k1); d1.orphan and d2.k2 stay unused.
+    #[case("WITH d1 AS (SELECT k1, k2, orphan FROM t), d2 AS (SELECT k1, k2 FROM d1) \
+            SELECT k1 FROM d2", vec!["k2", "orphan"])]
+    // SELECT * in the final query marks every source column used.
+    #[case("WITH cte1 AS (SELECT col1, col2 FROM t) SELECT * FROM cte1", vec![])]
+    // UNNEST marks arr used; the final SELECT marks other used.
+    #[case("WITH cte1 AS (SELECT arr, other FROM t) SELECT other FROM cte1, UNNEST(arr) AS x", vec![])]
+    fn fires_identically_on_the_googlesql_backend(
+        #[case] sql: &str,
+        #[case] expected_unused: Vec<&str>,
+    ) {
+        let diagnostics = run_rule(&UnusedColumnInCte, sql);
+
+        let mut found: Vec<String> = diagnostics
+            .iter()
+            .map(|d| {
+                d.message()
+                    .strip_prefix("Unused column: ")
+                    .unwrap_or_else(|| d.message())
+                    .to_string()
+            })
+            .collect();
+        found.sort();
+
+        let mut expected: Vec<String> = expected_unused.iter().map(|s| (*s).to_string()).collect();
+        expected.sort();
+
+        assert_eq!(found, expected, "unused columns mismatch for: {sql}");
+    }
 }

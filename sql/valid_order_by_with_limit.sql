@@ -11,7 +11,7 @@ with top_users as (
 select
   *
 from
-  top_users
+  top_users;
 
 -- Valid: ORDER BY with LIMIT in subquery
 select
@@ -24,7 +24,7 @@ from (
     table1
   order by id
   limit 10
-)
+);
 
 -- Valid: ORDER BY in final SELECT
 select
@@ -32,4 +32,4 @@ select
   name
 from
   table1
-order by id
+order by id;
