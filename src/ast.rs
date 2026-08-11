@@ -480,12 +480,11 @@ mod googlesql_tests {
     use super::*;
     use googlesql::Module;
 
-    /// A fresh googlesql module on the `native-ffi` backend. Building it links
-    /// the prebuilt ZetaSQL shared library rather than JIT-compiling the wasm, so
-    /// each test pays a small one-time cost; reuse the returned module across as
-    /// many parses as the test needs.
+    /// A fresh googlesql module on the compile-time-selected backend. Building it
+    /// links/loads the ZetaSQL parser, so each test pays a small one-time cost;
+    /// reuse the returned module across as many parses as the test needs.
     fn module() -> Module {
-        Module::new_native_ffi().expect("load googlesql native-ffi module")
+        crate::build_module().expect("load googlesql module")
     }
 
     #[test]

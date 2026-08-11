@@ -3,3 +3,12 @@
 # dhat heap profiling
 dhat-*.json
 dhat/
+
+# goreleaser output and the native-ffi sidecar its build hook stages at the repo
+# root before archiving (see .goreleaser.yaml)
+/dist/
+/libguest_ffi.so
+/libguest_ffi.dylib
+
+# Local Claude Code guidance, kept out of version control
+/CLAUDE.md
