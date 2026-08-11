@@ -38,6 +38,27 @@ jobs:
       - name: Run cargo test
         run: cargo test --release
 
+  # The stable/beta/nightly matrix above builds the default (wasmtime) backend.
+  # This job exercises the native-ffi compile path that release archives ship for
+  # x86_64-linux: build.rs's rpath wiring, the `#[cfg(feature = "native-ffi")]`
+  # arm, and googlesql's prebuilt-cdylib download (a prebuilt exists for this
+  # target, so build.rs fetches it).
+  native-ffi:
+    name: Check native-ffi backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Install stable
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup default stable
+
+      - name: Run cargo clippy (native-ffi)
+        run: cargo clippy --all-targets --features native-ffi -- -D warnings -W clippy::nursery
+
+      - name: Run cargo test (native-ffi)
+        run: cargo test --release --features native-ffi
+
   coverage:
     runs-on: ubuntu-latest
     env:

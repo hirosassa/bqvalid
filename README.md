@@ -11,11 +11,22 @@
 
 ## Installation
 
-You can get binary of `bqvalid` from the release page like
+Download the archive for your platform from the [release page](https://github.com/hirosassa/bqvalid/releases) and extract the `bqvalid` binary. The assets are named `bqvalid-<arch>-<os>`:
+
+- `bqvalid-x86_64-linux.tar.gz`
+- `bqvalid-arm64-darwin.tar.gz` (Apple Silicon)
+- `bqvalid-x86_64-darwin.tar.gz` (Intel Mac)
+- `bqvalid-x86_64-windows.zip`
+
+For example, on Apple Silicon:
 
 ```shell
-curl -LsJO https://github.com/hirosassa/bqvalid/releases/download/v0.0.9/bqvalid-x86_64-apple-darwin
+curl -LO https://github.com/hirosassa/bqvalid/releases/latest/download/bqvalid-arm64-darwin.tar.gz
+tar xzf bqvalid-arm64-darwin.tar.gz
+./bqvalid --help
 ```
+
+The Linux (`x86_64`) and Apple Silicon archives bundle a `libguest_ffi.{so,dylib}` shared library next to the binary; keep the two together (the binary loads it from its own directory). The Intel Mac and Windows builds are self-contained.
 
 ## Usage
 
