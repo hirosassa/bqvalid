@@ -103,9 +103,7 @@ pub fn is_function_name(node: &NodeRef<'_>) -> bool {
     reason = "test code"
 )]
 pub fn parse_sql(sql: &str) -> crate::ast::Ast {
-    use googlesql::Module;
-
-    let mut module = Module::new_native_ffi().expect("googlesql module builds");
+    let mut module = crate::build_module().expect("googlesql module builds");
     crate::ast::Ast::from_googlesql(&mut module, sql).expect("googlesql parses the sql")
 }
 

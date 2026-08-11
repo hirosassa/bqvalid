@@ -27,7 +27,7 @@ fn bench_unused_column_check(c: &mut Criterion) {
     ];
 
     let mut group = c.benchmark_group("unused_column_in_cte");
-    let mut module = Module::new_native_ffi().expect("googlesql module builds");
+    let mut module = bqvalid::build_module().expect("googlesql module builds");
 
     for (name, path) in test_cases {
         let sql = fs::read_to_string(path).unwrap_or_else(|_| panic!("Failed to read {}", path));
@@ -56,7 +56,7 @@ fn bench_parse_and_check(c: &mut Criterion) {
     ];
 
     let mut group = c.benchmark_group("parse_and_check");
-    let mut module = Module::new_native_ffi().expect("googlesql module builds");
+    let mut module = bqvalid::build_module().expect("googlesql module builds");
 
     for (name, path) in test_cases {
         let sql = fs::read_to_string(path).unwrap_or_else(|_| panic!("Failed to read {}", path));

@@ -42,7 +42,7 @@ fn main() {
 
     println!("Starting memory profiling...");
 
-    let mut module = Module::new_native_ffi().expect("googlesql module builds");
+    let mut module = bqvalid::build_module().expect("googlesql module builds");
     run_check(&mut module, "small", "./benches/fixtures/bench_small.sql");
     run_check(&mut module, "medium", "./benches/fixtures/bench_medium.sql");
     run_check(&mut module, "large", "./benches/fixtures/bench_large.sql");
