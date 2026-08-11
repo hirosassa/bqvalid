@@ -20,6 +20,10 @@ const DATE_TIME_FUNCTIONS: &[&str] = &[
     "datetime_trunc",
     "timestamp_trunc",
     "time_trunc",
+    "format_date",
+    "format_datetime",
+    "format_timestamp",
+    "format_time",
 ];
 
 /// Cast target types that mark the cast as a date/time transform of the operand,
@@ -40,21 +44,39 @@ impl Rule for ApplyFunctionToPartitionColumn {
             return;
         }
         for descendant in node.pre_order() {
-            let operand = match descendant.kind() {
-                // A comparison's left operand is the first child of the
-                // binary/between node (e.g. `date(col) = '...'`,
-                // `date(col) between '...' and '...'`).
-                "ASTBinaryExpression" | "ASTBetweenExpression" => descendant.child(0),
-                _ => continue,
-            };
-            let Some(operand) = operand else {
-                continue;
-            };
-            if let Some(func) = date_time_transform_on_column(&operand, sql) {
-                diagnostics.push(new_full_scan_warning(&func));
+            for operand in comparison_operands(&descendant) {
+                if let Some(func) = date_time_transform_on_column(&operand, sql) {
+                    diagnostics.push(new_full_scan_warning(&func));
+                }
             }
         }
     }
+}
+
+/// The operands a comparison exposes to partition pruning, so both sides of a
+/// binary comparison are checked (`date(col) = '...'` and `'...' = date(col)`).
+///
+/// - `ASTBinaryExpression`: the first and last children are the two operands
+///   (any operator sits between them); either may carry the transform.
+/// - `ASTBetweenExpression` / `ASTInExpression`: only the tested value (first
+///   child) is a pruning candidate — wrapping the BETWEEN bounds or the IN list
+///   values does not defeat pruning of that tested value.
+///
+/// Other node kinds expose nothing. Duplicate ids are dropped so a degenerate
+/// single-operand node is never checked twice.
+fn comparison_operands<'a>(node: &NodeRef<'a>) -> Vec<NodeRef<'a>> {
+    let candidates = match node.kind() {
+        "ASTBinaryExpression" => vec![node.child(0), node.children().into_iter().last()],
+        "ASTBetweenExpression" | "ASTInExpression" => vec![node.child(0)],
+        _ => return Vec::new(),
+    };
+    let mut operands: Vec<NodeRef<'a>> = Vec::new();
+    for operand in candidates.into_iter().flatten() {
+        if !operands.iter().any(|seen| seen.id() == operand.id()) {
+            operands.push(operand);
+        }
+    }
+    operands
 }
 
 /// Returns the offending `function_call` / `cast_expression` node when `operand`
@@ -75,6 +97,12 @@ fn date_time_transform_on_column<'a>(operand: &NodeRef<'a>, sql: &str) -> Option
         {
             Some(*operand)
         }
+        // `EXTRACT(part FROM col)` is a dedicated node whose first named child is
+        // the date part (e.g. `year`), playing the same role as a function name.
+        // Skipping it keeps the part from being read as a column, so only a real
+        // operand column trips the rule. EXTRACT is inherently a date/time
+        // transform, so no function-name allowlist check is needed.
+        "ASTExtractExpression" if wraps_column(operand, sql, true) => Some(*operand),
         _ => None,
     }
 }
@@ -169,6 +197,26 @@ mod tests {
     }
 
     #[test]
+    fn flags_date_function_on_column_on_right_operand() {
+        // The transform can sit on either side of the comparison; a right-hand
+        // `date(col)` defeats pruning just as a left-hand one does.
+        let sql = "select * from t where '2024-01-01' = date(created_at)";
+        let diagnostics = run_rule(&ApplyFunctionToPartitionColumn, sql);
+        assert_eq!(diagnostics.len(), 1, "literal = date(col) must be flagged");
+    }
+
+    #[test]
+    fn flags_cast_to_date_on_column_on_right_operand() {
+        let sql = "select * from t where '2024-01-01' = cast(created_at as date)";
+        let diagnostics = run_rule(&ApplyFunctionToPartitionColumn, sql);
+        assert_eq!(
+            diagnostics.len(),
+            1,
+            "literal = cast(col as date) must be flagged"
+        );
+    }
+
+    #[test]
     fn flags_trunc_function_on_column() {
         let sql = "select * from t where timestamp_trunc(ts, day) = '2024-01-01'";
         let diagnostics = run_rule(&ApplyFunctionToPartitionColumn, sql);
@@ -191,6 +239,66 @@ mod tests {
         let sql = "select * from t where date(_partitiontime) = '2024-01-01'";
         let diagnostics = run_rule(&ApplyFunctionToPartitionColumn, sql);
         assert_eq!(diagnostics.len(), 1, "date(_partitiontime) must be flagged");
+    }
+
+    #[test]
+    fn flags_date_function_on_column_in_in_expression() {
+        // `date(col) IN (...)` wraps the tested value in a transform and defeats
+        // pruning just like a binary comparison does.
+        let sql = "select * from t where date(created_at) in ('2024-01-01', '2024-01-02')";
+        let diagnostics = run_rule(&ApplyFunctionToPartitionColumn, sql);
+        assert_eq!(diagnostics.len(), 1, "date(col) IN (..) must be flagged");
+    }
+
+    #[test]
+    fn does_not_flag_bare_column_in_expression() {
+        let sql = "select * from t where created_at in ('2024-01-01', '2024-01-02')";
+        let diagnostics = run_rule(&ApplyFunctionToPartitionColumn, sql);
+        assert!(
+            diagnostics.is_empty(),
+            "a bare column IN list prunes partitions and must not be flagged"
+        );
+    }
+
+    #[test]
+    fn flags_extract_on_column() {
+        let sql = "select * from t where extract(year from created_at) = 2024";
+        let diagnostics = run_rule(&ApplyFunctionToPartitionColumn, sql);
+        assert_eq!(diagnostics.len(), 1, "extract(.. from col) must be flagged");
+    }
+
+    #[test]
+    fn does_not_flag_extract_on_literal() {
+        // The date part (`year`) must not be mistaken for a column: with a literal
+        // operand there is no partition column to prune.
+        let sql = "select * from t where extract(year from date '2024-01-01') = 2024";
+        let diagnostics = run_rule(&ApplyFunctionToPartitionColumn, sql);
+        assert!(
+            diagnostics.is_empty(),
+            "extract from a literal has no column to prune"
+        );
+    }
+
+    #[test]
+    fn flags_format_date_on_column() {
+        let sql = "select * from t where format_date('%Y-%m', created_at) = '2024-01'";
+        let diagnostics = run_rule(&ApplyFunctionToPartitionColumn, sql);
+        assert_eq!(
+            diagnostics.len(),
+            1,
+            "format_date(fmt, col) must be flagged"
+        );
+    }
+
+    #[test]
+    fn flags_format_timestamp_on_column() {
+        let sql = "select * from t where format_timestamp('%Y', created_at) = '2024'";
+        let diagnostics = run_rule(&ApplyFunctionToPartitionColumn, sql);
+        assert_eq!(
+            diagnostics.len(),
+            1,
+            "format_timestamp(fmt, col) must be flagged"
+        );
     }
 
     #[test]
