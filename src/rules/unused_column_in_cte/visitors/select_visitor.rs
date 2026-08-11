@@ -19,7 +19,7 @@ impl SelectVisitor {
         // Check if this SELECT is inside a CTE
         let mut current = node.parent();
         while let Some(parent) = current {
-            if parent.kind() == "cte" {
+            if parent.kind() == "ASTAliasedQuery" {
                 return false; // Inside a CTE
             }
             current = parent.parent();
@@ -30,12 +30,12 @@ impl SelectVisitor {
 
 impl NodeVisitor for SelectVisitor {
     fn visit(&self, node: NodeRef<'_>, context: &mut AnalysisContext) {
-        if node.kind() == "select" {
+        if node.kind() == "ASTSelect" {
             let sql = context.sql();
             let is_final_select = self.is_final_select(&node);
 
             // Find the select_list within the SELECT
-            if let Some(select_list) = find_child_of_kind(&node, "select_list") {
+            if let Some(select_list) = find_child_of_kind(&node, "ASTSelectList") {
                 if is_final_select {
                     // For final SELECT: extract and mark columns through dependency tracing
                     let final_columns = extract_final_select_columns(&select_list, sql, context);
@@ -76,7 +76,7 @@ fn extract_and_mark_expression_columns(
 
     // Process each select_expression
     for child in select_list.children() {
-        if child.kind() == "select_expression" {
+        if child.kind() == "ASTSelectColumn" {
             // Extract all field references from the expression (including nested ones in function calls)
             extract_field_references_from_expression(&child, sql, &resolver, context);
         }
@@ -87,12 +87,8 @@ fn extract_and_mark_expression_columns(
 fn find_parent_cte_name(select_node: &NodeRef<'_>, sql: &str) -> String {
     let mut current = select_node.parent();
     while let Some(parent) = current {
-        if parent.kind() == "cte" {
-            return parent
-                .child_by_field_name("alias_name")
-                .map(|n| get_node_text(&n, sql))
-                .unwrap_or("")
-                .to_string();
+        if parent.kind() == "ASTAliasedQuery" {
+            return utils::get_cte_name(&parent, sql).to_string();
         }
         current = parent.parent();
     }
@@ -107,8 +103,9 @@ fn extract_field_references_from_expression(
     resolver: &utils::TableResolver,
     context: &mut AnalysisContext,
 ) {
-    // Process current node if it's a field or identifier
-    if node.kind() == "field" || node.kind() == "identifier" {
+    // Process current node if it's a column reference (`ASTPathExpression` on
+    // googlesql).
+    if node.kind() == "ASTPathExpression" {
         if is_function_name(node) {
             return;
         }
@@ -143,16 +140,37 @@ fn extract_final_select_columns(
     let resolver = utils::TableResolver::new(&tables, &alias_map, &context.cte_columns);
 
     for child in select_list.children() {
-        if child.kind() == "select_expression" {
+        // The star check comes first: on googlesql a `*` is itself an
+        // `ASTSelectColumn`, which would otherwise match the column branch.
+        if utils::is_star_select_item(&child) {
+            // SELECT * - expand to all columns from referenced tables
+            for table in &tables {
+                if let Some(cols) = context.get_cte_columns(table) {
+                    for col in cols {
+                        columns.push(ColumnInfo::new(
+                            Some(table.clone()),
+                            col.column_name.clone(),
+                            None,
+                            child.start_position().row,
+                            child.start_position().column,
+                        ));
+                    }
+                }
+            }
+        } else if child.kind() == "ASTSelectColumn" {
             // Strategy: First try to get the direct field reference,
             // then recursively find all field nodes (for function arguments, etc.)
 
-            // Check if this has a direct field child (simple column reference)
-            let has_direct_field = child.children().into_iter().any(|c| c.kind() == "field");
+            // Check if this has a direct column-reference child. On googlesql the
+            // column reference is an `ASTPathExpression`.
+            let has_direct_field = child
+                .children()
+                .into_iter()
+                .any(|c| c.kind() == "ASTPathExpression");
 
             if !has_direct_field {
                 // Fallback: treat the whole expression text as a column reference
-                // This handles cases where tree-sitter doesn't create a 'field' node
+                // (e.g. an expression that is not a plain column).
                 let column_text = get_node_text(&child, sql);
                 let col_name = utils::extract_column_name(column_text);
 
@@ -171,21 +189,6 @@ fn extract_final_select_columns(
 
             // Recurse to find any nested fields (after both branches)
             extract_all_fields_into_vec(&child, sql, &resolver, &mut columns);
-        } else if child.kind() == "select_all" {
-            // SELECT * - expand to all columns from referenced tables
-            for table in &tables {
-                if let Some(cols) = context.get_cte_columns(table) {
-                    for col in cols {
-                        columns.push(ColumnInfo::new(
-                            Some(table.clone()),
-                            col.column_name.clone(),
-                            None,
-                            child.start_position().row,
-                            child.start_position().column,
-                        ));
-                    }
-                }
-            }
         }
     }
 
@@ -199,10 +202,10 @@ fn extract_all_fields_into_vec(
     resolver: &utils::TableResolver,
     columns: &mut Vec<ColumnInfo>,
 ) {
-    // Process current node if it's a field or identifier
-    // Note: tree-sitter may use 'field' for qualified references (table.column)
-    // and 'identifier' for simple column references
-    if node.kind() == "field" || node.kind() == "identifier" {
+    // Process current node if it's a column reference. googlesql uses
+    // `ASTPathExpression` for both simple and qualified references (its text
+    // carries the whole possibly-qualified name).
+    if node.kind() == "ASTPathExpression" {
         if is_function_name(node) {
             return;
         }

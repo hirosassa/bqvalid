@@ -5,6 +5,7 @@ use bqvalid::output::{self, FileResult, OutputFormat};
 use bqvalid::rules::{known_rule_ids, run_rules_ignoring};
 use clap::Parser;
 use clap_verbosity_flag::Verbosity;
+use googlesql::Module;
 use log::debug;
 use rayon::prelude::*;
 use std::collections::HashSet;
@@ -12,8 +13,6 @@ use std::fs;
 use std::io::{self, Read, Stdin};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use tree_sitter::Parser as TsParser;
-use tree_sitter_sql_bigquery::language;
 use walkdir::{DirEntry, WalkDir};
 
 fn get_version() -> &'static str {
@@ -99,8 +98,8 @@ fn main() -> ExitCode {
 }
 
 /// Read SQL from stdin and analyse it as a single `<stdin>` result. Returns
-/// `None` (after logging to stderr) when the input cannot be read or the
-/// grammar fails to load, so the caller can exit with a failure code.
+/// `None` (after logging to stderr) when the input cannot be read or the parser
+/// module fails to load, so the caller can exit with a failure code.
 fn analyse_stdin(stdin: &Stdin, ignore: &HashSet<String>) -> Option<Vec<FileResult>> {
     let mut sql = String::new();
     let read_result = stdin.lock().read_to_string(&mut sql);
@@ -108,10 +107,10 @@ fn analyse_stdin(stdin: &Stdin, ignore: &HashSet<String>) -> Option<Vec<FileResu
         eprintln!("Error reading stdin: {}", e);
         return None;
     }
-    let mut parser = new_parser()?;
+    let mut module = new_module()?;
     Some(vec![FileResult {
         path: PathBuf::from("<stdin>"),
-        diagnostics: analyse_sql(&mut parser, &sql, ignore),
+        diagnostics: analyse_sql_googlesql(&mut module, &sql, ignore),
         read_error: None,
     }])
 }
@@ -146,56 +145,89 @@ fn is_sql(entry: &DirEntry) -> bool {
         .unwrap_or(false)
 }
 
-/// Build a parser with the BigQuery grammar loaded once. Returns `None` if the
-/// grammar fails to load (logged to stderr).
-fn new_parser() -> Option<TsParser> {
-    let mut parser = TsParser::new();
-    match parser.set_language(&language()) {
-        Ok(()) => Some(parser),
+/// Build a googlesql (ZetaSQL) parser module. Returns `None` if the module fails
+/// to initialize (logged to stderr).
+///
+/// Uses the `native-ffi` backend ([`Module::new_native_ffi`]): the ZetaSQL parser
+/// linked as a prebuilt C-ABI shared library and run as native code, rather than
+/// the default wasmtime engine that JIT-compiles the wasm on first use.
+fn new_module() -> Option<Module> {
+    match Module::new_native_ffi() {
+        Ok(module) => Some(module),
         Err(e) => {
-            eprintln!("Error loading BigQuery grammar: {}", e);
+            eprintln!("Error initializing googlesql parser: {}", e);
             None
         }
     }
 }
 
-/// Analyse many files in parallel. Each worker thread builds its parser once
-/// (via `map_init`) and reuses it across the files it handles, so the grammar
-/// is loaded per thread rather than per file. Results are sorted by path so the
-/// output is stable regardless of scheduling.
+/// Analyse many files in parallel. Each worker thread builds its parser module
+/// once (via `map_init`) and reuses it across the files it handles, so the
+/// module is initialized per thread rather than per file. A `None` module means
+/// initialization failed and was already reported; that thread's files then
+/// yield no diagnostics. Results are sorted by path so the output is stable
+/// regardless of scheduling.
+///
+/// The `Module` is large, so it is boxed to keep the per-item closure state
+/// small.
 fn analyse_paths(paths: Vec<PathBuf>, ignore: &HashSet<String>) -> Vec<FileResult> {
     let mut results: Vec<FileResult> = paths
         .par_iter()
-        .map_init(new_parser, |parser, path| match fs::read_to_string(path) {
-            Ok(sql) => {
-                let diagnostics = parser
-                    .as_mut()
-                    .map_or_else(Vec::new, |parser| analyse_sql(parser, &sql, ignore));
-                FileResult {
-                    path: path.clone(),
-                    diagnostics,
-                    read_error: None,
+        .map_init(
+            || new_module().map(Box::new),
+            |module, path| match fs::read_to_string(path) {
+                Ok(sql) => {
+                    let diagnostics = module.as_mut().map_or_else(Vec::new, |module| {
+                        analyse_sql_googlesql(module.as_mut(), &sql, ignore)
+                    });
+                    FileResult {
+                        path: path.clone(),
+                        diagnostics,
+                        read_error: None,
+                    }
                 }
-            }
-            Err(e) => FileResult {
-                path: path.clone(),
-                diagnostics: Vec::new(),
-                read_error: Some(e.to_string()),
+                Err(e) => FileResult {
+                    path: path.clone(),
+                    diagnostics: Vec::new(),
+                    read_error: Some(e.to_string()),
+                },
             },
-        })
+        )
         .collect();
     results.sort_by(|a, b| a.path.cmp(&b.path));
     results
 }
 
-fn analyse_sql(parser: &mut TsParser, sql: &str, ignore: &HashSet<String>) -> Vec<Diagnostic> {
-    let Some(tree) = parser.parse(sql, None) else {
-        eprintln!("Error parsing SQL input");
-        return Vec::new();
+/// Analyse `sql` with the googlesql (ZetaSQL) backend.
+///
+/// ZetaSQL parses one statement at a time and cannot recover past a syntax
+/// error, so `parse_statements` returns every statement it parsed before
+/// stopping plus the error that stopped it. We run the rules over each parsed
+/// statement (byte offsets are relative to the whole script, so positions stay
+/// correct) and report the halting error, if any, to stderr, still emitting
+/// diagnostics for the statements it could parse.
+fn analyse_sql_googlesql(
+    module: &mut Module,
+    sql: &str,
+    ignore: &HashSet<String>,
+) -> Vec<Diagnostic> {
+    let parsed = match module.parse_statements(sql) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            eprintln!("Error parsing SQL input: {}", e);
+            return Vec::new();
+        }
     };
+    if let Some(error) = parsed.error() {
+        eprintln!("Error parsing SQL input: {}", error);
+    }
 
-    let ast = Ast::from_tree_sitter(&tree);
-    run_rules_ignoring(&ast, sql, ignore)
+    let mut diagnostics = Vec::new();
+    for statement in parsed.statements() {
+        let ast = Ast::from_googlesql_root(statement.root(), sql);
+        diagnostics.extend(run_rules_ignoring(&ast, sql, ignore));
+    }
+    diagnostics
 }
 
 /// Resolve the effective set of ignored rule ids from the config file and CLI.
@@ -245,11 +277,32 @@ mod tests {
     use std::fs::{self, File};
     use tempfile::tempdir;
 
-    /// Build a parser and run the full rule set over `sql`, mirroring how the
-    /// binary drives `analyse_sql`.
+    /// Build a googlesql module and run the full rule set over `sql`, mirroring
+    /// how the binary drives `analyse_sql_googlesql`.
     fn analyse(sql: &str) -> Vec<Diagnostic> {
-        let mut parser = new_parser().expect("grammar loads");
-        analyse_sql(&mut parser, sql, &HashSet::new())
+        let mut module = new_module().expect("googlesql module builds");
+        analyse_sql_googlesql(&mut module, sql, &HashSet::new())
+    }
+
+    #[test]
+    fn flags_current_date_end_to_end() {
+        // The whole pipeline (ZetaSQL parse -> neutral AST -> rules) must surface
+        // the use_current_date rule with a 1-based position.
+        let diagnostics = analyse("SELECT CURRENT_DATE() FROM t");
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].row(), 1);
+        assert_eq!(diagnostics[0].col(), 8);
+    }
+
+    #[test]
+    fn analyses_every_statement_in_a_script() {
+        // parse_statements recovers at statement boundaries, so a CURRENT_DATE in
+        // the second statement is still flagged, with a position relative to the
+        // whole script (row 2).
+        let sql = "SELECT id FROM a;\nSELECT CURRENT_DATE() FROM b";
+        let diagnostics = analyse(sql);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].row(), 2);
     }
 
     #[test]
@@ -278,9 +331,8 @@ mod tests {
 
     #[test]
     fn multiple_messages_in_single_sql_file() {
-        let mut parser = TsParser::new();
-        parser.set_language(&language()).unwrap();
-
+        // A single statement that trips more than one rule (use_current_date and
+        // compare_table_suffix_with_subquery) yields multiple diagnostics.
         let sql = "\
 select
   current_date,
@@ -293,10 +345,7 @@ where
     select dt from dates
   )
 ";
-        let tree = parser.parse(sql, None).unwrap();
-        let ast = Ast::from_tree_sitter(&tree);
-
-        let diagnostics = run_rules_ignoring(&ast, sql, &HashSet::new());
+        let diagnostics = analyse(sql);
         assert!(diagnostics.len() > 1);
     }
 
@@ -312,13 +361,13 @@ where
     }
 
     #[test]
-    fn analyse_sql_reuses_a_single_parser_across_calls() {
-        // P1: one parser instance handles many inputs without reloading the
-        // grammar. Each parse must stay independent (no state leaking between
-        // calls), so a clean query after a dirty one still yields nothing.
-        let mut parser = new_parser().expect("grammar loads");
-        let dirty = analyse_sql(&mut parser, "SELECT CURRENT_DATE()", &HashSet::new());
-        let clean = analyse_sql(&mut parser, "SELECT id FROM users", &HashSet::new());
+    fn analyse_sql_reuses_a_single_module_across_calls() {
+        // One module instance handles many inputs without reinitializing. Each
+        // parse must stay independent (no state leaking between calls), so a clean
+        // query after a dirty one still yields nothing.
+        let mut module = new_module().expect("googlesql module builds");
+        let dirty = analyse_sql_googlesql(&mut module, "SELECT CURRENT_DATE()", &HashSet::new());
+        let clean = analyse_sql_googlesql(&mut module, "SELECT id FROM users", &HashSet::new());
         assert!(!dirty.is_empty(), "dirty query should produce diagnostics");
         assert!(clean.is_empty(), "clean query should produce none");
     }
@@ -326,7 +375,7 @@ where
     #[test]
     fn analyse_sql_aggregates_multiple_rules_from_a_single_query() {
         // Triggers both use_current_date and compare_table_suffix_with_subquery,
-        // proving analyse_sql fans a query out across every rule and merges results.
+        // proving analysis fans a query out across every rule and merges results.
         let sql = "SELECT CURRENT_DATE() AS d \
                    FROM t \
                    WHERE _TABLE_SUFFIX = (SELECT MAX(suffix) FROM u)";
@@ -356,9 +405,10 @@ where
 
     #[test]
     fn analyse_sql_does_not_panic_on_garbage_input() {
-        // Unparseable input must degrade gracefully (no panic), not crash the tool.
-        let _ = analyse("!@#$ not really ;; SQL (((");
-        let _ = analyse("SELECT FROM WHERE");
+        // Unparseable input must degrade gracefully (the parse error is reported
+        // to stderr and yields no diagnostics), not crash the tool.
+        assert!(analyse("!@#$ not really ;; SQL (((").is_empty());
+        assert!(analyse("SELECT FROM WHERE").is_empty());
     }
 
     #[test]

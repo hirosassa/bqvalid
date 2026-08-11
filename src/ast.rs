@@ -1,22 +1,19 @@
 //! A backend-neutral syntax tree.
 //!
-//! Rules used to navigate `tree_sitter::Node`/`Tree` directly. That coupled the
-//! whole rule set to tree-sitter's API — in particular to `parent()`,
-//! `next_named_sibling()`, `child_by_field_name()` and node identity via
-//! `id()`, none of which a top-down parser like ZetaSQL/googlesql exposes.
+//! Rules navigate through this owned arena rather than a parser's own node type,
+//! so they depend on `parent()`, `next_named_sibling()` and node identity via
+//! `id()` — none of which a top-down parser like ZetaSQL/googlesql exposes
+//! directly.
 //!
-//! [`Ast`] decouples the rules from any one parser by *materializing* the tree
-//! into an arena we own. Because we build the arena ourselves, we can populate
-//! parent links, node identity (the arena index) and per-node field names even
-//! for a backend that only hands us children top-down. Today the arena is built
-//! from tree-sitter (see [`Ast::from_tree_sitter`]); a googlesql backend can
-//! populate the same shape later without touching a single rule.
+//! [`Ast`] decouples the rules from the parser by *materializing* the tree into
+//! an arena we own. Because we build the arena ourselves, we can synthesize
+//! parent links and node identity (the arena index) even for a backend that only
+//! hands us children top-down. The arena is built from googlesql (ZetaSQL); see
+//! [`Ast::from_googlesql`].
 //!
-//! The arena is a *faithful mirror* of the source tree: every node (named and
-//! anonymous) is kept, with its kind, byte range, 0-based start position, field
-//! name under its parent, parent link and ordered children. [`NodeRef`] offers
-//! the same navigation surface the rules already relied on, so migrating a rule
-//! is a rename rather than a rewrite.
+//! The arena is a *faithful mirror* of the source tree: every node is kept, with
+//! its kind, byte range, 0-based start position, parent link and ordered
+//! children. [`NodeRef`] offers a stable navigation surface for the rules.
 
 use std::ops::Range;
 
@@ -24,9 +21,9 @@ use googlesql::{AstNode, Module};
 
 /// A node's start position in the source, 0-based on both axes.
 ///
-/// Mirrors tree-sitter's `Point` (same `row`/`column` field names) so callers
-/// that read `start_position().row` keep working unchanged. Diagnostics convert
-/// to 1-based via [`crate::rules::helpers::one_based_start`].
+/// The `row`/`column` field names let callers read `start_position().row`
+/// directly. Diagnostics convert to 1-based via
+/// [`crate::rules::helpers::one_based_start`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Point {
     pub row: usize,
@@ -37,9 +34,6 @@ pub struct Point {
 struct NodeData {
     kind: String,
     named: bool,
-    /// The field this node occupies in its parent, if any (tree-sitter field
-    /// names). `None` for anonymous positions and for backends without fields.
-    field_name: Option<String>,
     byte_range: Range<usize>,
     start: Point,
     parent: Option<usize>,
@@ -74,90 +68,46 @@ impl Ast {
         self.root().pre_order()
     }
 
-    /// Build the arena from a tree-sitter tree, capturing every node with its
-    /// kind, named flag, field name, byte range, start position, parent link
-    /// and ordered children.
-    #[must_use]
-    pub fn from_tree_sitter(tree: &tree_sitter::Tree) -> Self {
-        let mut nodes: Vec<NodeData> = Vec::new();
-        let root = build(tree.root_node(), None, None, &mut nodes);
-        Self { nodes, root }
-    }
-
     /// Build the arena from a googlesql (ZetaSQL/WASM) parse of a **single**
     /// statement, reusing the given `module` (creating one compiles the WASM,
     /// which is expensive, so callers keep one around).
     ///
-    /// The neutral shape is populated the same way as [`Ast::from_tree_sitter`],
-    /// but from a backend that gives us far less: ZetaSQL exposes only each
-    /// node's kind, its children and an optional byte range — no parent links,
-    /// no node identity, no field names and no row/column. This constructor
-    /// therefore synthesizes the parent links and identity (the arena index),
-    /// derives 0-based positions from the byte offsets, and leaves `field_name`
-    /// empty. Nodes ZetaSQL reports without a byte range (in practice the
-    /// top-level statement/query/select) get a range spanning their located
-    /// children.
+    /// ZetaSQL exposes only each node's kind, its children and an optional byte
+    /// range — no parent links, no node identity and no row/column. This
+    /// constructor therefore synthesizes the parent links and identity (the
+    /// arena index) and derives 0-based positions from the byte offsets. Nodes
+    /// ZetaSQL reports without a byte range (in practice the top-level
+    /// statement/query/select) get a range spanning their located children.
     ///
     /// # Errors
     /// Returns the googlesql [`Error`](googlesql::Error) if the WASM call fails
     /// or the SQL is not exactly one syntactically valid statement (there is no
     /// error recovery and no multi-statement support).
     ///
-    /// Note: the kinds here are ZetaSQL class names (`ASTSelect`, …), not the
-    /// tree-sitter names the current rules match on, so no rule runs against
-    /// this arena yet — wiring it into the analysis path is a later phase.
+    /// The kinds here are ZetaSQL class names (`ASTSelect`, …), which is the
+    /// vocabulary every rule matches on.
     pub fn from_googlesql(module: &mut Module, sql: &str) -> Result<Self, googlesql::Error> {
         let statement = module.parse_statement(sql)?;
+        Ok(Self::from_googlesql_root(statement.root(), sql))
+    }
+
+    /// Build the arena from an already-parsed ZetaSQL statement `root`.
+    ///
+    /// The node byte offsets must be relative to the whole `sql`, which is how
+    /// `Module::parse_statements` reports them for every statement in a
+    /// semicolon-separated script (not just the first). Driving multi-statement
+    /// analysis therefore means calling this once per statement with the shared
+    /// script as `sql`, so row/column stay correct past the first statement.
+    pub fn from_googlesql_root(root: &AstNode, sql: &str) -> Self {
         let line_starts = line_starts(sql);
         let mut nodes: Vec<NodeData> = Vec::new();
-        let root = build_googlesql(statement.root(), None, &line_starts, &mut nodes);
-        Ok(Self { nodes, root })
+        let root = build_googlesql(root, None, &line_starts, &mut nodes);
+        Self { nodes, root }
     }
 
     fn get(&self, idx: usize) -> Option<&NodeData> {
         self.nodes.get(idx)
     }
-}
-
-/// Recursively add `node` (occupying `field` under `parent`) and its subtree to
-/// `nodes`, returning the new node's arena index.
-fn build(
-    node: tree_sitter::Node<'_>,
-    field: Option<String>,
-    parent: Option<usize>,
-    nodes: &mut Vec<NodeData>,
-) -> usize {
-    let idx = nodes.len();
-    let pos = node.start_position();
-    nodes.push(NodeData {
-        kind: node.kind().to_string(),
-        named: node.is_named(),
-        field_name: field,
-        byte_range: node.start_byte()..node.end_byte(),
-        start: Point {
-            row: pos.row,
-            column: pos.column,
-        },
-        parent,
-        children: Vec::new(),
-    });
-
-    let mut children = Vec::new();
-    let mut cursor = node.walk();
-    if cursor.goto_first_child() {
-        loop {
-            let field_name = cursor.field_name().map(ToString::to_string);
-            let child_idx = build(cursor.node(), field_name, Some(idx), nodes);
-            children.push(child_idx);
-            if !cursor.goto_next_sibling() {
-                break;
-            }
-        }
-    }
-    if let Some(data) = nodes.get_mut(idx) {
-        data.children = children;
-    }
-    idx
 }
 
 /// Byte offset of the start of each line in `sql` (line 0 starts at 0). Used to
@@ -174,8 +124,8 @@ fn line_starts(sql: &str) -> Vec<usize> {
 }
 
 /// The 0-based (row, column) of `byte`, where `column` is a byte offset within
-/// the line (matching tree-sitter's `Point`). `starts` must be the ascending
-/// line-start table from [`line_starts`].
+/// the line. `starts` must be the ascending line-start table from
+/// [`line_starts`].
 fn point_at(starts: &[usize], byte: usize) -> Point {
     let row = match starts.binary_search(&byte) {
         // `byte` is exactly a line start: column 0 of that line.
@@ -212,11 +162,8 @@ fn derive_span<'a>(children: impl Iterator<Item = &'a Range<usize>>) -> Option<R
 /// Recursively add the googlesql `node` (under `parent`) and its subtree to
 /// `nodes`, returning the new node's arena index.
 ///
-/// ZetaSQL nodes are all "named" (there are no anonymous token nodes) and carry
-/// no field names, so `named` is always `true` and `field_name` always `None`.
-/// A consequence is that on this backend `named_children()` equals `children()`
-/// and `child_by_field_name()` is always `None` — field-based navigation is
-/// inert until a later phase maps ZetaSQL's typed accessors onto field names.
+/// ZetaSQL nodes are all "named" (there are no anonymous token nodes), so
+/// `named` is always `true` and `named_children()` equals `children()`.
 ///
 /// A node ZetaSQL reports no byte range for gets one spanning its located
 /// children (see [`derive_span`]).
@@ -232,7 +179,6 @@ fn build_googlesql(
     nodes.push(NodeData {
         kind: node.kind().to_string(),
         named: true,
-        field_name: None,
         start: point_at(starts, range.start),
         byte_range: range,
         parent,
@@ -269,10 +215,8 @@ fn build_googlesql(
 
 /// A cheap, `Copy` handle to one node in an [`Ast`].
 ///
-/// Exposes the same navigation the rules relied on under tree-sitter —
-/// `kind`, `parent`, `children`/`named_children`, `child_by_field_name`,
-/// `next_named_sibling`, position and text — so a rule migrates by swapping the
-/// type, not its logic.
+/// Exposes the navigation the rules rely on — `kind`, `parent`,
+/// `children`/`named_children`, `next_named_sibling`, position and text.
 #[derive(Clone, Copy)]
 pub struct NodeRef<'a> {
     ast: &'a Ast,
@@ -332,12 +276,6 @@ impl<'a> NodeRef<'a> {
         self.data().map_or(Point { row: 0, column: 0 }, |d| d.start)
     }
 
-    /// The field name this node occupies in its parent, if any.
-    #[must_use]
-    pub fn field_name(&self) -> Option<&'a str> {
-        self.data().and_then(|d| d.field_name.as_deref())
-    }
-
     /// The node's source text, or `None` if the byte range does not map to a
     /// valid `&str` slice of `sql` (e.g. a tree/source mismatch that cuts a
     /// multibyte character). Replaces `Node::utf8_text`.
@@ -380,15 +318,6 @@ impl<'a> NodeRef<'a> {
     #[must_use]
     pub fn named_child(&self, i: usize) -> Option<Self> {
         self.named_children().into_iter().nth(i)
-    }
-
-    /// The child occupying the named field `name`, if any. Replaces
-    /// `Node::child_by_field_name`.
-    #[must_use]
-    pub fn child_by_field_name(&self, name: &str) -> Option<Self> {
-        self.children()
-            .into_iter()
-            .find(|c| c.field_name() == Some(name))
     }
 
     /// The next named sibling following this node, if any. Replaces
@@ -434,70 +363,40 @@ mod tests {
     use crate::rules::helpers::parse_sql;
 
     #[test]
-    fn root_and_kinds_mirror_the_source_tree() {
-        // `select a from t` must materialize the expected top-level shape with
-        // tree-sitter's kind names preserved (Phase 1 keeps the vocabulary).
-        let ast = parse_sql("select a from t");
-        let kinds: Vec<&str> = ast.pre_order().iter().map(NodeRef::kind).collect();
-        assert!(kinds.contains(&"select"), "kinds were: {kinds:?}");
-        assert!(kinds.contains(&"identifier"));
-        assert!(kinds.contains(&"from_clause"));
-    }
-
-    #[test]
     fn pre_order_visits_parent_before_children_in_source_order() {
-        let ast = parse_sql("select a, b from t");
+        let sql = "select a, b from t";
+        let ast = parse_sql(sql);
         let order = ast.pre_order();
-        // The select_list must appear before the identifiers it contains, and
-        // `a` must appear before `b`.
+        // The select_list must appear before the column references it contains,
+        // and `a` must appear before `b`.
         let pos = |pred: &dyn Fn(&NodeRef) -> bool| order.iter().position(pred);
-        let list = pos(&|n| n.kind() == "select_list").unwrap();
+        let list = pos(&|n| n.kind() == "ASTSelectList").unwrap();
         let a = order
             .iter()
-            .position(|n| n.kind() == "identifier" && n.text("select a, b from t") == Some("a"))
+            .position(|n| n.kind() == "ASTPathExpression" && n.text(sql) == Some("a"))
             .unwrap();
         let b = order
             .iter()
-            .position(|n| n.kind() == "identifier" && n.text("select a, b from t") == Some("b"))
+            .position(|n| n.kind() == "ASTPathExpression" && n.text(sql) == Some("b"))
             .unwrap();
         assert!(list < a && a < b, "list={list} a={a} b={b}");
     }
 
     #[test]
-    fn parent_links_point_back_up() {
-        let ast = parse_sql("select a from t");
-        let ident = ast
-            .pre_order()
-            .into_iter()
-            .find(|n| n.kind() == "identifier")
-            .unwrap();
-        // Walking parents must eventually reach a node with no parent (the root).
-        let mut cur = Some(ident);
-        let mut steps = 0;
-        while let Some(n) = cur {
-            cur = n.parent();
-            steps += 1;
-            assert!(steps < 100, "parent chain must terminate");
-        }
-        assert!(steps > 1, "identifier must have ancestors");
-    }
-
-    #[test]
-    fn children_include_anonymous_named_children_do_not() {
-        // A comma-separated select list has anonymous comma tokens between the
-        // named select_expression children; children() sees them, the named
-        // variant does not.
+    fn every_node_is_named_on_googlesql() {
+        // ZetaSQL emits no anonymous token nodes, so children() and
+        // named_children() coincide for every node (there are no anonymous
+        // tokens such as the commas in a select list).
         let ast = parse_sql("select a, b from t");
-        let list = ast
-            .pre_order()
-            .into_iter()
-            .find(|n| n.kind() == "select_list")
-            .unwrap();
-        assert!(
-            list.children().len() > list.named_children().len(),
-            "anonymous tokens (commas) must be visible via children() only"
-        );
-        assert!(list.named_children().iter().all(NodeRef::is_named));
+        for node in ast.pre_order() {
+            assert!(node.is_named(), "kind {} must be named", node.kind());
+            assert_eq!(
+                node.children().len(),
+                node.named_children().len(),
+                "kind {} must have no anonymous children",
+                node.kind()
+            );
+        }
     }
 
     #[test]
@@ -509,7 +408,7 @@ mod tests {
         let col1 = ast
             .pre_order()
             .into_iter()
-            .find(|n| n.kind() == "identifier" && n.text(sql) == Some("col1"))
+            .find(|n| n.kind() == "ASTPathExpression" && n.text(sql) == Some("col1"))
             .unwrap();
         assert_eq!(col1.start_position(), Point { row: 0, column: 7 });
         assert_eq!(col1.start_byte(), 7);
@@ -525,7 +424,7 @@ mod tests {
         let col1 = ast
             .pre_order()
             .into_iter()
-            .find(|n| n.kind() == "identifier" && n.text(sql) == Some("col1"))
+            .find(|n| n.kind() == "ASTPathExpression" && n.text(sql) == Some("col1"))
             .unwrap();
         assert_eq!(col1.byte_range(), 7..11);
         // byte 10 is the first byte of the 3-byte 'あ', so 7..11 cuts it.
@@ -533,30 +432,18 @@ mod tests {
     }
 
     #[test]
-    fn next_named_sibling_skips_anonymous_tokens() {
+    fn next_named_sibling_walks_to_the_following_column() {
+        // In `select a, b`, the two select columns are siblings under the select
+        // list; next_named_sibling from `a`'s column reaches `b`'s.
         let sql = "select a, b from t";
         let ast = parse_sql(sql);
         let a = ast
             .pre_order()
             .into_iter()
-            .find(|n| n.kind() == "select_expression" && n.text(sql) == Some("a"))
+            .find(|n| n.kind() == "ASTSelectColumn" && n.text(sql) == Some("a"))
             .unwrap();
         let next = a.next_named_sibling().expect("a has a named sibling b");
         assert_eq!(next.text(sql), Some("b"));
-    }
-
-    #[test]
-    fn id_uniquely_identifies_nodes() {
-        let ast = parse_sql("select a from t");
-        let nodes = ast.pre_order();
-        let root = ast.root();
-        assert_eq!(root.id(), ast.root().id(), "same node -> same id");
-        // Every node in a pre-order walk has a distinct id.
-        let mut ids: Vec<usize> = nodes.iter().map(NodeRef::id).collect();
-        let count = ids.len();
-        ids.sort_unstable();
-        ids.dedup();
-        assert_eq!(ids.len(), count, "ids must be unique");
     }
 
     #[test]
@@ -578,9 +465,8 @@ mod tests {
     }
 }
 
-/// Tests for the (dormant) googlesql/ZetaSQL backend. These exercise
-/// [`Ast::from_googlesql`] directly — no rule uses it yet, since ZetaSQL kind
-/// names differ from tree-sitter's (rule migration is Phase 3).
+/// Tests for the googlesql/ZetaSQL backend. These exercise
+/// [`Ast::from_googlesql`] directly, asserting the arena shape ZetaSQL produces.
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -594,31 +480,29 @@ mod googlesql_tests {
     use super::*;
     use googlesql::Module;
 
-    /// A fresh googlesql module. `Module::new()` compiles the ZetaSQL WASM
-    /// (~1s), so each test pays this once; reuse the returned module across as
+    /// A fresh googlesql module on the `native-ffi` backend. Building it links
+    /// the prebuilt ZetaSQL shared library rather than JIT-compiling the wasm, so
+    /// each test pays a small one-time cost; reuse the returned module across as
     /// many parses as the test needs.
     fn module() -> Module {
-        Module::new().expect("load googlesql wasm module")
+        Module::new_native_ffi().expect("load googlesql native-ffi module")
     }
 
     #[test]
     fn from_googlesql_uses_zetasql_kind_names() {
-        // The googlesql arena speaks ZetaSQL's vocabulary (AST* class names),
-        // which is exactly why rules can't run on it until Phase 3.
+        // The googlesql arena speaks ZetaSQL's vocabulary (AST* class names).
         let sql = "select a from t";
         let ast = Ast::from_googlesql(&mut module(), sql).expect("parse");
         let kinds: Vec<&str> = ast.pre_order().iter().map(NodeRef::kind).collect();
         assert!(kinds.contains(&"ASTSelect"), "kinds were: {kinds:?}");
         assert!(kinds.contains(&"ASTFromClause"), "kinds were: {kinds:?}");
         assert!(kinds.contains(&"ASTIdentifier"), "kinds were: {kinds:?}");
-        // And it does NOT speak tree-sitter's vocabulary.
-        assert!(!kinds.contains(&"select"), "kinds were: {kinds:?}");
     }
 
     #[test]
     fn byte_ranges_extract_the_right_source_text() {
         // Every node's byte range must slice back to its own source text, so
-        // rules (later) can read text the same way they do under tree-sitter.
+        // rules can read text from the source directly.
         let sql = "select a from t";
         let ast = Ast::from_googlesql(&mut module(), sql).expect("parse");
         let ident = ast
@@ -668,7 +552,7 @@ mod googlesql_tests {
     #[test]
     fn parent_links_and_ids_are_synthesized() {
         // googlesql exposes no parent links or node identity; the arena
-        // synthesizes both, exactly as it does for tree-sitter.
+        // synthesizes both.
         let sql = "select a from t";
         let ast = Ast::from_googlesql(&mut module(), sql).expect("parse");
         let ident = ast
@@ -703,8 +587,8 @@ mod googlesql_tests {
 
     #[test]
     fn multiple_statements_are_rejected() {
-        // ZetaSQL's parse_statement accepts a single statement only; multi
-        // statement handling is deferred to the backend flip (Phase 3).
+        // ZetaSQL's parse_statement accepts a single statement only; scripts are
+        // driven statement-by-statement via parse_statements in the analysis path.
         let err = Ast::from_googlesql(&mut module(), "select 1; select 2;");
         assert!(err.is_err(), "multiple statements must be rejected");
     }

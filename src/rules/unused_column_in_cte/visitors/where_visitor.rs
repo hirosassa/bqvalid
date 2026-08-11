@@ -13,13 +13,10 @@ pub struct WhereVisitor;
 
 impl NodeVisitor for WhereVisitor {
     fn visit(&self, node: NodeRef<'_>, context: &mut AnalysisContext) {
-        // Process JOIN conditions, WHERE clauses, and GROUP BY
-        if matches!(
-            node.kind(),
-            "join_condition" | "where_clause" | "group_by_clause"
-        ) {
+        // Process JOIN conditions, WHERE clauses, and GROUP BY (googlesql kinds).
+        if matches!(node.kind(), "ASTOnClause" | "ASTWhereClause" | "ASTGroupBy") {
             process_condition_node(&node, context);
-        } else if node.kind() == "from_clause" {
+        } else if node.kind() == "ASTFromClause" {
             // Process UNNEST functions in FROM clause
             process_unnest_in_from(&node, context);
         }
@@ -51,7 +48,7 @@ fn extract_tables_from_parent(
     sql: &str,
 ) -> (Vec<String>, HashMap<String, String>) {
     if let Some(select_node) = find_parent_select(node) {
-        let from_node = find_child_of_kind(&select_node, "from_clause");
+        let from_node = find_child_of_kind(&select_node, "ASTFromClause");
         return utils::extract_table(from_node, sql);
     }
     (Vec::new(), HashMap::new())
@@ -68,10 +65,10 @@ fn process_unnest_in_from(from_node: &NodeRef<'_>, context: &mut AnalysisContext
 
     // Find all UNNEST clauses in FROM clause (BigQuery-specific syntax)
     for child in from_node.pre_order() {
-        if child.kind() == "unnest_operator" || child.kind() == "unnest_clause" {
+        if child.kind() == "ASTUnnestExpression" {
             // Extract identifiers from UNNEST - these are the column references
             for unnest_child in child.pre_order() {
-                if unnest_child.kind() == "identifier" || unnest_child.kind() == "field" {
+                if unnest_child.kind() == "ASTPathExpression" {
                     let column_text = get_node_text(&unnest_child, sql);
                     let table = resolver.resolve_qualified_or(column_text);
 
@@ -107,7 +104,7 @@ fn extract_columns_from_condition(
 ) {
     // Traverse the condition tree to find all column references
     for child in node.pre_order() {
-        if child.kind() == "field" || child.kind() == "identifier" {
+        if child.kind() == "ASTPathExpression" {
             // Skip function names
             if is_function_name(&child) {
                 continue;

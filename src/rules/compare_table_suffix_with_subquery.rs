@@ -15,7 +15,7 @@ impl Rule for CompareTableSuffixWithSubquery {
     }
 
     fn check_node(&self, node: NodeRef<'_>, sql: &str, diagnostics: &mut Vec<Diagnostic>) {
-        if node.kind() == "where_clause" {
+        if node.kind() == "ASTWhereClause" {
             if let Some(diagnostic) = compared_with_subquery_in_binary_expression(node, sql) {
                 diagnostics.push(diagnostic);
             }
@@ -26,22 +26,33 @@ impl Rule for CompareTableSuffixWithSubquery {
     }
 }
 
+/// True when `node` is a `_TABLE_SUFFIX` reference: the `ASTPathExpression`
+/// wrapping the identifier on googlesql (whose text is the single name).
+fn is_table_suffix(node: &NodeRef<'_>, src: &str) -> bool {
+    node.kind() == "ASTPathExpression"
+        && get_node_text(node, src).eq_ignore_ascii_case("_table_suffix")
+}
+
+/// True when `node` is a scalar subquery (`ASTExpressionSubquery` on googlesql).
+fn is_subquery(node: &NodeRef<'_>) -> bool {
+    node.kind() == "ASTExpressionSubquery"
+}
+
 fn compared_with_subquery_in_binary_expression(n: NodeRef<'_>, src: &str) -> Option<Diagnostic> {
     for node in n.pre_order() {
-        let text = get_node_text(&node, src);
-
-        if node.kind() == "identifier" && text.eq_ignore_ascii_case("_table_suffix") {
-            let Some(parent) = node.parent() else {
-                continue;
-            };
-            let Some(right_operand) = parent.children().into_iter().last() else {
-                continue;
-            };
-            if parent.kind() == "binary_expression"
-                && right_operand.kind() == "select_subexpression"
-            {
-                return Some(new_full_scan_warning(&right_operand));
-            }
+        if node.kind() != "ASTBinaryExpression" {
+            continue;
+        }
+        // `_TABLE_SUFFIX <op> (subquery)`: the left operand is the first child and
+        // the compared-against subquery is the last.
+        let Some(left) = node.child(0) else {
+            continue;
+        };
+        let Some(right) = node.children().into_iter().last() else {
+            continue;
+        };
+        if is_table_suffix(&left, src) && is_subquery(&right) {
+            return Some(new_full_scan_warning(&right));
         }
     }
     None
@@ -49,23 +60,19 @@ fn compared_with_subquery_in_binary_expression(n: NodeRef<'_>, src: &str) -> Opt
 
 fn compared_with_subquery_in_between_expression(n: NodeRef<'_>, src: &str) -> Option<Diagnostic> {
     for node in n.pre_order() {
-        let text = get_node_text(&node, src);
-
-        if node.kind() == "identifier" && text.eq_ignore_ascii_case("_table_suffix") {
-            let Some(parent) = node.parent() else {
-                continue;
-            };
-            if parent.kind() == "between_operator" {
-                for c in parent.children() {
-                    let Some(first_child) = c.child(0) else {
-                        continue;
-                    };
-                    if (c.kind() == "between_from" || c.kind() == "between_to")
-                        && first_child.kind() == "select_subexpression"
-                    {
-                        return Some(new_full_scan_warning(&first_child));
-                    }
-                }
+        if node.kind() != "ASTBetweenExpression" {
+            continue;
+        }
+        let Some(operand) = node.child(0) else {
+            continue;
+        };
+        if !is_table_suffix(&operand, src) {
+            continue;
+        }
+        // googlesql lists the bounds directly under ASTBetweenExpression.
+        for c in node.children() {
+            if is_subquery(&c) {
+                return Some(new_full_scan_warning(&c));
             }
         }
     }
@@ -109,7 +116,7 @@ from
         let ast = parse_sql(sql);
 
         for node in ast.pre_order() {
-            if node.kind() == "where_clause" {
+            if node.kind() == "ASTWhereClause" {
                 assert!(compared_with_subquery_in_binary_expression(node, sql).is_none());
                 assert!(compared_with_subquery_in_between_expression(node, sql).is_none());
             }
@@ -131,7 +138,7 @@ where
         let ast = parse_sql(sql);
 
         for node in ast.pre_order() {
-            if node.kind() == "where_clause" {
+            if node.kind() == "ASTWhereClause" {
                 assert!(compared_with_subquery_in_binary_expression(node, sql).is_some());
             }
         }
@@ -153,7 +160,7 @@ where
         let ast = parse_sql(sql);
 
         for node in ast.pre_order() {
-            if node.kind() == "where_clause" {
+            if node.kind() == "ASTWhereClause" {
                 assert!(compared_with_subquery_in_between_expression(node, sql).is_some());
             }
         }
@@ -175,7 +182,7 @@ where
         let ast = parse_sql(sql);
 
         for node in ast.pre_order() {
-            if node.kind() == "where_clause" {
+            if node.kind() == "ASTWhereClause" {
                 assert!(compared_with_subquery_in_between_expression(node, sql).is_some());
             }
         }
@@ -191,7 +198,7 @@ where
 
         let mut checked = false;
         for node in ast.pre_order() {
-            if node.kind() == "where_clause" {
+            if node.kind() == "ASTWhereClause" {
                 let diagnostic = compared_with_subquery_in_binary_expression(node, sql)
                     .expect("subquery comparison should be flagged");
                 // 1-based, and row 1 because the query is on a single line.
@@ -204,15 +211,26 @@ where
     }
 
     #[test]
-    fn does_not_panic_on_malformed_where_clause() {
-        // Truncated / malformed input must not panic the node-navigation logic.
+    fn comparing_against_a_literal_is_not_flagged() {
+        let sql = "SELECT x FROM t WHERE _TABLE_SUFFIX = '2022-06-01'";
+        let ast = parse_sql(sql);
+        assert!(
+            CompareTableSuffixWithSubquery.check(&ast, sql).is_empty(),
+            "comparing against a literal must not be flagged"
+        );
+    }
+
+    #[test]
+    fn does_not_panic_on_non_subquery_comparisons() {
+        // WHERE shapes that do not compare _TABLE_SUFFIX against a subquery must
+        // not panic the node navigation (and must not be flagged).
         for sql in [
-            "SELECT x FROM t WHERE _TABLE_SUFFIX",
-            "WHERE _TABLE_SUFFIX = (",
+            "SELECT x FROM t WHERE _TABLE_SUFFIX = '2022-06-01'",
+            "SELECT x FROM t WHERE _TABLE_SUFFIX BETWEEN '2022-06-01' AND '2022-06-02'",
         ] {
             let ast = parse_sql(sql);
             for node in ast.pre_order() {
-                if node.kind() == "where_clause" {
+                if node.kind() == "ASTWhereClause" {
                     let _ = compared_with_subquery_in_binary_expression(node, sql);
                     let _ = compared_with_subquery_in_between_expression(node, sql);
                 }
