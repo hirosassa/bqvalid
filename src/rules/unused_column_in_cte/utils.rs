@@ -22,12 +22,21 @@ pub fn get_cte_name<'a>(cte_node: &NodeRef<'_>, sql: &'a str) -> &'a str {
 
 /// True when a select-list child represents `*`.
 ///
-/// googlesql wraps the `ASTStar` in an `ASTSelectColumn`, so the star is one
-/// level deeper. This hides that nesting for the select-list scanners.
+/// googlesql wraps the star in an `ASTSelectColumn`, so it sits one level
+/// deeper. A bare `*` is an `ASTStar`; `* EXCEPT (...)` / `* REPLACE (...)`
+/// become `ASTStarWithModifiers`. Both still return every column of the source,
+/// so both count as a star for the purpose of marking source columns used
+/// (the excepted/replaced column names are mentioned explicitly and treated as
+/// uses, not as unused columns).
 pub fn is_star_select_item(child: &NodeRef<'_>) -> bool {
-    child.kind() == "ASTStar"
+    is_star_kind(child.kind())
         || (child.kind() == "ASTSelectColumn"
-            && child.children().into_iter().any(|c| c.kind() == "ASTStar"))
+            && child.children().into_iter().any(|c| is_star_kind(c.kind())))
+}
+
+/// True for the googlesql node kinds that expand to every source column.
+fn is_star_kind(kind: &str) -> bool {
+    matches!(kind, "ASTStar" | "ASTStarWithModifiers")
 }
 
 /// Extract column name from a potentially qualified column reference

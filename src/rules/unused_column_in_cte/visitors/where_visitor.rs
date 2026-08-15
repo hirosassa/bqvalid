@@ -8,17 +8,25 @@ use crate::rules::unused_column_in_cte::{
     context::AnalysisContext, models::ColumnInfo, utils, visitor::NodeVisitor,
 };
 
-/// Visitor for processing WHERE clauses, JOIN conditions, and GROUP BY
+/// Visitor for processing WHERE clauses, JOIN conditions, GROUP BY, HAVING,
+/// ORDER BY, and JOIN ... USING.
 pub struct WhereVisitor;
 
 impl NodeVisitor for WhereVisitor {
     fn visit(&self, node: NodeRef<'_>, context: &mut AnalysisContext) {
-        // Process JOIN conditions, WHERE clauses, and GROUP BY (googlesql kinds).
-        if matches!(node.kind(), "ASTOnClause" | "ASTWhereClause" | "ASTGroupBy") {
-            process_condition_node(&node, context);
-        } else if node.kind() == "ASTFromClause" {
+        // Every column reference (`ASTPathExpression`) appearing in one of these
+        // clauses is a use of that column. ORDER BY hangs off `ASTQuery` as a
+        // sibling of the SELECT (not a child of it), so table resolution falls
+        // back to that query's SELECT — see `extract_tables_from_parent`.
+        match node.kind() {
+            "ASTOnClause" | "ASTWhereClause" | "ASTGroupBy" | "ASTHaving" | "ASTOrderBy" => {
+                process_condition_node(&node, context);
+            }
             // Process UNNEST functions in FROM clause
-            process_unnest_in_from(&node, context);
+            "ASTFromClause" => process_unnest_in_from(&node, context),
+            // JOIN ... USING(col) references `col` on every joined table.
+            "ASTUsingClause" => process_using_clause(&node, context),
+            _ => {}
         }
     }
 }
@@ -42,16 +50,64 @@ fn process_condition_node(node: &NodeRef<'_>, context: &mut AnalysisContext) {
     }
 }
 
-/// Extract tables from the parent SELECT node
+/// Extract tables from the SELECT that owns this clause.
 fn extract_tables_from_parent(
     node: &NodeRef<'_>,
     sql: &str,
 ) -> (Vec<String>, HashMap<String, String>) {
-    if let Some(select_node) = find_parent_select(node) {
+    if let Some(select_node) = enclosing_select(node) {
         let from_node = find_child_of_kind(&select_node, "ASTFromClause");
         return utils::extract_table(from_node, sql);
     }
     (Vec::new(), HashMap::new())
+}
+
+/// Find the SELECT that a clause belongs to.
+///
+/// Most clauses (WHERE, GROUP BY, HAVING, JOIN ON/USING) are descendants of the
+/// `ASTSelect`, so the nearest-ancestor SELECT is correct. ORDER BY (and LIMIT)
+/// instead hang off the enclosing `ASTQuery` as a direct sibling of the SELECT,
+/// so no SELECT ancestor exists; in that case take the SELECT child of that
+/// `ASTQuery`. When the query's body is a set operation (e.g. `... UNION ALL
+/// ... ORDER BY x`) there is no single owning SELECT and this returns `None`, so
+/// the caller degrades to an empty table set rather than mis-resolving.
+fn enclosing_select<'a>(node: &NodeRef<'a>) -> Option<NodeRef<'a>> {
+    find_parent_select(node).or_else(|| {
+        node.parent()
+            .filter(|parent| parent.kind() == "ASTQuery")
+            .and_then(|query| find_child_of_kind(&query, "ASTSelect"))
+    })
+}
+
+/// Mark the columns named in a JOIN ... USING(...) clause as used.
+///
+/// A USING column is unqualified and refers to the same-named column on *every*
+/// joined table, so it must be marked used on all in-scope tables that define
+/// it (resolving it to a single owner would leave the other side's column
+/// falsely flagged as unused). On googlesql the column names inside USING are
+/// bare `ASTIdentifier`s rather than `ASTPathExpression`s.
+fn process_using_clause(node: &NodeRef<'_>, context: &mut AnalysisContext) {
+    let sql = context.sql();
+    let (tables, _alias_map) = extract_tables_from_parent(node, sql);
+
+    for child in node.pre_order() {
+        if child.kind() != "ASTIdentifier" {
+            continue;
+        }
+        let col_name = get_node_text(&child, sql);
+        let owners: Vec<String> = tables
+            .iter()
+            .filter(|table| {
+                context
+                    .get_cte_columns(table)
+                    .is_some_and(|cols| cols.iter().any(|c| c.column_name == col_name))
+            })
+            .cloned()
+            .collect();
+        for owner in owners {
+            context.mark_used(&owner, col_name);
+        }
+    }
 }
 
 /// Process UNNEST functions in FROM clause and mark their column arguments as used

@@ -48,6 +48,15 @@ pub fn check(ast: &Ast, sql: &str) -> Vec<Diagnostic> {
     // Single-pass traversal with all visitors
     // Note: DistinctVisitor removed - DISTINCT doesn't make all CTE columns used,
     // only the columns in the SELECT clause are affected by DISTINCT
+    //
+    // TODO(future): usage detection is still per-clause and resolves column
+    // owners within one FROM scope. Two known gaps remain and can cause false
+    // positives/negatives; they need cross-scope analysis and are out of scope
+    // here:
+    //   - Correlated subqueries: a reference to an outer-scope CTE column from
+    //     inside a nested subquery is not attributed to that outer CTE.
+    //   - Multi-level aliasing: `t.col` where `t` aliases a derived table/
+    //     subquery is not resolved back to the underlying CTE column.
     for node in ast.pre_order() {
         cte_visitor.visit(node, &mut context);
         select_star_visitor.visit(node, &mut context);
@@ -804,6 +813,27 @@ from
     #[case("WITH cte1 AS (SELECT col1, col2 FROM t) SELECT * FROM cte1", vec![])]
     // UNNEST marks arr used; the final SELECT marks other used.
     #[case("WITH cte1 AS (SELECT arr, other FROM t) SELECT other FROM cte1, UNNEST(arr) AS x", vec![])]
+    // ORDER BY in the final query marks the ordered column used.
+    #[case("WITH c AS (SELECT a, b, unused FROM t) SELECT a FROM c ORDER BY b", vec!["unused"])]
+    // ORDER BY with a table qualifier is still a use.
+    #[case("WITH c AS (SELECT a, b, unused FROM t) SELECT a FROM c ORDER BY c.b", vec!["unused"])]
+    // HAVING references count as uses.
+    #[case("WITH c AS (SELECT cat, val, unused FROM t) \
+            SELECT cat FROM c GROUP BY cat HAVING sum(val) > 1", vec!["unused"])]
+    // JOIN ... USING(col) uses `col` on BOTH sides of the join.
+    #[case("WITH c AS (SELECT id, x, unused FROM t), d AS (SELECT id, y FROM t) \
+            SELECT c.x, d.y FROM c JOIN d USING (id)", vec!["unused"])]
+    // SELECT * EXCEPT(x) still returns every other column, so nothing is unused
+    // (the excepted column is mentioned explicitly and treated as a use).
+    #[case("WITH c AS (SELECT a, b, x FROM t) SELECT * EXCEPT (x) FROM c", vec![])]
+    // SELECT * REPLACE(expr AS col) returns every column and references col.
+    #[case("WITH c AS (SELECT a, b FROM t) SELECT * REPLACE (b + 1 AS b) FROM c", vec![])]
+    // ORDER BY on a set operation (UNION) has no single owning SELECT, so its
+    // columns can't be resolved; the rule must degrade gracefully (no panic, no
+    // false positive) and still flag columns unused via the SELECT lists. `un`
+    // is never selected anywhere, so it stays unused; `a` is used in both arms.
+    #[case("WITH c AS (SELECT a, un FROM t) \
+            SELECT a FROM c UNION ALL SELECT a FROM c ORDER BY a", vec!["un"])]
     fn fires_identically_on_the_googlesql_backend(
         #[case] sql: &str,
         #[case] expected_unused: Vec<&str>,
