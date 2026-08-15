@@ -66,21 +66,17 @@ fn extract_tables_from_parent(
 ///
 /// Most clauses (WHERE, GROUP BY, HAVING, JOIN ON/USING) are descendants of the
 /// `ASTSelect`, so the nearest-ancestor SELECT is correct. ORDER BY (and LIMIT)
-/// instead hang off the enclosing `ASTQuery` as siblings of the SELECT, so no
-/// SELECT ancestor exists; in that case take the SELECT child of the nearest
-/// `ASTQuery`.
+/// instead hang off the enclosing `ASTQuery` as a direct sibling of the SELECT,
+/// so no SELECT ancestor exists; in that case take the SELECT child of that
+/// `ASTQuery`. When the query's body is a set operation (e.g. `... UNION ALL
+/// ... ORDER BY x`) there is no single owning SELECT and this returns `None`, so
+/// the caller degrades to an empty table set rather than mis-resolving.
 fn enclosing_select<'a>(node: &NodeRef<'a>) -> Option<NodeRef<'a>> {
-    if let Some(select_node) = find_parent_select(node) {
-        return Some(select_node);
-    }
-    let mut current = node.parent();
-    while let Some(parent) = current {
-        if parent.kind() == "ASTQuery" {
-            return find_child_of_kind(&parent, "ASTSelect");
-        }
-        current = parent.parent();
-    }
-    None
+    find_parent_select(node).or_else(|| {
+        node.parent()
+            .filter(|parent| parent.kind() == "ASTQuery")
+            .and_then(|query| find_child_of_kind(&query, "ASTSelect"))
+    })
 }
 
 /// Mark the columns named in a JOIN ... USING(...) clause as used.

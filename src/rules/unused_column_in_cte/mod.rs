@@ -828,6 +828,12 @@ from
     #[case("WITH c AS (SELECT a, b, x FROM t) SELECT * EXCEPT (x) FROM c", vec![])]
     // SELECT * REPLACE(expr AS col) returns every column and references col.
     #[case("WITH c AS (SELECT a, b FROM t) SELECT * REPLACE (b + 1 AS b) FROM c", vec![])]
+    // ORDER BY on a set operation (UNION) has no single owning SELECT, so its
+    // columns can't be resolved; the rule must degrade gracefully (no panic, no
+    // false positive) and still flag columns unused via the SELECT lists. `un`
+    // is never selected anywhere, so it stays unused; `a` is used in both arms.
+    #[case("WITH c AS (SELECT a, un FROM t) \
+            SELECT a FROM c UNION ALL SELECT a FROM c ORDER BY a", vec!["un"])]
     fn fires_identically_on_the_googlesql_backend(
         #[case] sql: &str,
         #[case] expected_unused: Vec<&str>,
