@@ -2,13 +2,11 @@ version: 2
 
 project_name: bqvalid
 
-# Hybrid backend per target. googlesql's `native-ffi` engine is faster but links a
-# prebuilt `libguest_ffi` C-ABI shared library that is only prebuilt for
-# x86_64-linux and aarch64-darwin, and needs that sidecar shipped next to the
-# binary. Those two targets are therefore built with `--features native-ffi` (on a
-# runner of their own arch, so googlesql's build.rs downloads the matching prebuilt)
-# and bundle the sidecar into the archive. The other two targets are cross-built and
-# use the default, self-contained wasmtime backend (no sidecar).
+# bqvalid uses googlesql's `native-ffi` engine exclusively. It links a prebuilt
+# `libguest_ffi` C-ABI shared library that is only prebuilt for x86_64-linux and
+# aarch64-darwin, and needs that sidecar shipped next to the binary. Those are the
+# only supported targets: each is built on a runner of its own arch (so googlesql's
+# build.rs downloads the matching prebuilt) and bundles the sidecar into the archive.
 builds:
   - id: linux-nativeffi
     skip: '{{ eq .Runtime.Goos "darwin" }}'
@@ -30,19 +28,6 @@ builds:
       post:
         - sh -c 'cp target/x86_64-unknown-linux-gnu/release/build/googlesql-*/out/libguest_ffi.so ./libguest_ffi.so'
 
-  - id: windows-wasmtime
-    skip: '{{ eq .Runtime.Goos "darwin" }}'
-    builder: rust
-    binary: bqvalid
-    targets:
-      - x86_64-pc-windows-gnu
-    tool: cargo
-    command: zigbuild
-    flags:
-      - --release
-    env:
-      - BUILD_VERSION={{ .Version }}
-
   - id: macos-nativeffi
     skip: '{{ ne .Runtime.Goos "darwin" }}'
     builder: rust
@@ -61,22 +46,9 @@ builds:
       post:
         - sh -c 'cp target/aarch64-apple-darwin/release/build/googlesql-*/out/libguest_ffi.dylib ./libguest_ffi.dylib'
 
-  - id: macos-wasmtime
-    skip: '{{ ne .Runtime.Goos "darwin" }}'
-    builder: rust
-    binary: bqvalid
-    targets:
-      - x86_64-apple-darwin
-    tool: cross
-    command: build
-    flags:
-      - --release
-    env:
-      - BUILD_VERSION={{ .Version }}
-
-# Naming is unchanged from the previous single archive: bqvalid-<arch>-<os>. The
-# native-ffi archives additionally carry libguest_ffi.{so,dylib} next to the binary;
-# bqvalid's build.rs bakes an @executable_path/$ORIGIN rpath so it loads from there.
+# Archive naming: bqvalid-<arch>-<os>. Each archive carries libguest_ffi.{so,dylib}
+# next to the binary; bqvalid's build.rs bakes an @executable_path/$ORIGIN rpath so
+# it loads from there.
 archives:
   - id: linux-nativeffi
     ids:
@@ -109,38 +81,6 @@ archives:
       - README.md
       - src: libguest_ffi.dylib
         strip_parent: true
-
-  # One archive per build id. windows-wasmtime and macos-wasmtime are produced on
-  # different runners (see each build's `skip:`), so a single archive referencing
-  # both would have a per-platform binary-count mismatch on each runner; keeping
-  # them separate (like the native-ffi archives above) sidesteps that entirely.
-  - id: windows-wasmtime
-    ids:
-      - windows-wasmtime
-    formats: [ 'zip' ]
-    name_template: >-
-      {{ .ProjectName }}-
-      {{- if eq .Arch "amd64" }}x86_64
-      {{- else if eq .Arch "386" }}i386
-      {{- else }}{{ .Arch }}{{ end }}-
-      {{- .Os }}
-    files:
-      - LICENSE
-      - README.md
-
-  - id: macos-wasmtime
-    ids:
-      - macos-wasmtime
-    formats: [ 'tar.gz' ]
-    name_template: >-
-      {{ .ProjectName }}-
-      {{- if eq .Arch "amd64" }}x86_64
-      {{- else if eq .Arch "386" }}i386
-      {{- else }}{{ .Arch }}{{ end }}-
-      {{- .Os }}
-    files:
-      - LICENSE
-      - README.md
 
 checksum:
   disable: true

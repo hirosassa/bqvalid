@@ -148,8 +148,7 @@ fn is_sql(entry: &DirEntry) -> bool {
 /// Build a googlesql (ZetaSQL) parser module. Returns `None` if the module fails
 /// to initialize (logged to stderr).
 ///
-/// The backend (wasmtime by default, native-ffi under the `native-ffi` feature)
-/// is chosen at compile time by [`bqvalid::build_module`].
+/// The parser uses googlesql's native-ffi backend; see [`bqvalid::build_module`].
 fn new_module() -> Option<Module> {
     match bqvalid::build_module() {
         Ok(module) => Some(module),

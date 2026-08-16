@@ -1,7 +1,7 @@
 //! Wires up the run-time search paths for the `native-ffi` backend's sidecar.
 //!
-//! The default (wasmtime) backend is self-contained and needs nothing here. Under
-//! the `native-ffi` feature the binary links googlesql's prebuilt `libguest_ffi`
+//! native-ffi is bqvalid's only backend (enabled by default). The binary links
+//! googlesql's prebuilt `libguest_ffi`
 //! C-ABI shared library, whose reference is relocatable (`@rpath` install name /
 //! bare `SONAME`). Resolving it at run time is the consumer's job: a dependency's
 //! build script cannot bake an rpath into this binary's link. googlesql publishes
@@ -11,10 +11,8 @@
 //! the library next to itself. See googlesql's `docs/NATIVE.md`.
 
 fn main() {
-    // Only the native-ffi backend links the sidecar; the wasmtime default embeds
-    // the parser and needs no search paths. Skipping the rpath args otherwise
-    // also keeps them off targets that never use native-ffi (e.g. Windows, where
-    // `-Wl,-rpath` is meaningless).
+    // native-ffi is a default feature, so this normally runs. Guard anyway: a
+    // `--no-default-features` build links no sidecar and needs no search paths.
     if std::env::var_os("CARGO_FEATURE_NATIVE_FFI").is_none() {
         return;
     }

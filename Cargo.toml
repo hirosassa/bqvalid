@@ -14,16 +14,18 @@ log = "0.4.32"
 env_logger = "0.11.10"
 clap-verbosity-flag = "3.0.4"
 rayon = "1.12.0"
-googlesql = { version = "0.3.1" }
+googlesql = { version = "0.4.0" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "1.0"
 
 [features]
-# Default: the self-contained wasmtime backend — no sidecar, builds on every
-# target. Enable `native-ffi` to link googlesql's prebuilt C-ABI shared library
-# instead (faster, but ships a `libguest_ffi` sidecar and is only prebuilt for
-# some targets). Release archives select per target; see `.goreleaser.yaml`.
+# native-ffi is the sole parser backend: googlesql links its prebuilt
+# `libguest_ffi` C-ABI shared library and runs it as native code. It is enabled
+# by default and drives `build.rs`'s sidecar rpath wiring. The sidecar is only
+# prebuilt for x86_64-unknown-linux-gnu and aarch64-apple-darwin, so those are
+# the only supported targets (see `.goreleaser.yaml`).
+default = ["native-ffi"]
 native-ffi = ["googlesql/native-ffi"]
 
 [dev-dependencies]
