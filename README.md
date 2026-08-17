@@ -15,8 +15,6 @@ Download the archive for your platform from the [release page](https://github.co
 
 - `bqvalid-x86_64-linux.tar.gz`
 - `bqvalid-arm64-darwin.tar.gz` (Apple Silicon)
-- `bqvalid-x86_64-darwin.tar.gz` (Intel Mac)
-- `bqvalid-x86_64-windows.zip`
 
 For example, on Apple Silicon:
 
@@ -26,7 +24,7 @@ tar xzf bqvalid-arm64-darwin.tar.gz
 ./bqvalid --help
 ```
 
-The Linux (`x86_64`) and Apple Silicon archives bundle a `libguest_ffi.{so,dylib}` shared library next to the binary; keep the two together (the binary loads it from its own directory). The Intel Mac and Windows builds are self-contained.
+Both archives bundle a `libguest_ffi.{so,dylib}` shared library next to the binary; keep the two together (the binary loads it from its own directory). Only `x86_64` Linux and Apple Silicon are supported, since googlesql only prebuilds the `libguest_ffi` sidecar for those targets.
 
 ## Usage
 
