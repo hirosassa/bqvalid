@@ -76,7 +76,7 @@ pub fn extract_table(
                     if child.kind() == "ASTAlias" {
                         if let Some(alias_node) = child.named_children().into_iter().last() {
                             let alias_name = get_node_text(&alias_node, sql).to_string();
-                            alias_map.insert(alias_name, table_name.clone());
+                            alias_map.insert(alias_name, table_name);
                         }
                         break;
                     }
