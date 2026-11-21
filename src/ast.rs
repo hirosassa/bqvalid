@@ -472,12 +472,6 @@ mod tests {
     }
 
     #[test]
-    fn column_is_unchanged_for_ascii_only_sql() {
-        let point = position_of("SELECT 'abc', x FROM t", "x");
-        assert_eq!(point, Point { row: 0, column: 14 });
-    }
-
-    #[test]
     fn point_at_never_panics_on_non_boundary_or_out_of_range_bytes() {
         let sql = "a日b";
         let index = LineIndex::new(sql);

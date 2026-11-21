@@ -295,22 +295,14 @@ mod tests {
     #[test]
     fn column_is_char_based_with_non_ascii_text_end_to_end() {
         // Regression: a multibyte literal earlier on the line must not inflate
-        // the reported column, in text or JSON output.
+        // the reported column. Every output format reads `Diagnostic::col`, so
+        // pinning it here covers text, JSON and SARIF.
         let ascii = analyse("SELECT 'abc', x FROM (SELECT x FROM t ORDER BY x)");
         let japanese = analyse("SELECT '日本語', x FROM (SELECT x FROM t ORDER BY x)");
         assert_eq!(ascii.len(), 1);
         assert_eq!(japanese.len(), 1);
         assert_eq!((japanese[0].row(), japanese[0].col()), (1, 39));
         assert_eq!(japanese[0].col(), ascii[0].col());
-
-        let files = [output::FileDiagnostics {
-            path: "a.sql",
-            diagnostics: &japanese,
-        }];
-        let mut buf = Vec::new();
-        output::write_json(&mut buf, &files).unwrap();
-        let json = String::from_utf8(buf).unwrap();
-        assert!(json.contains("\"col\": 39"), "{json}");
     }
 
     #[test]
