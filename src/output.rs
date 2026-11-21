@@ -202,6 +202,7 @@ pub fn write_sarif<W: Write>(
                     "rules": rules,
                 }
             },
+            "columnKind": "unicodeCodePoints",
             "results": results,
         }],
     });
@@ -307,6 +308,20 @@ mod tests {
         let driver = &doc["runs"][0]["tool"]["driver"];
         assert_eq!(driver["name"], "bqvalid");
         assert_eq!(driver["version"], "1.2.3");
+    }
+
+    #[test]
+    fn sarif_declares_columns_as_unicode_code_points() {
+        // Diagnostic columns count chars; without this SARIF consumers assume
+        // UTF-16 code units and misplace columns after non-BMP chars (emoji).
+        let diags = sample();
+        let files = vec![FileDiagnostics {
+            path: "a.sql",
+            diagnostics: &diags,
+        }];
+        let doc = render_sarif(&files, "1.2.3");
+
+        assert_eq!(doc["runs"][0]["columnKind"], "unicodeCodePoints");
     }
 
     #[test]
