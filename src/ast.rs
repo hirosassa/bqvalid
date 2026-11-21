@@ -19,7 +19,8 @@ use std::ops::Range;
 
 use googlesql::{AstNode, Module};
 
-/// A node's start position in the source, 0-based on both axes.
+/// A node's start position in the source, 0-based on both axes. `column`
+/// counts chars (Unicode scalar values) from the line start, not bytes.
 ///
 /// The `row`/`column` field names let callers read `start_position().row`
 /// directly. Diagnostics convert to 1-based via
@@ -99,9 +100,9 @@ impl Ast {
     /// analysis therefore means calling this once per statement with the shared
     /// script as `sql`, so row/column stay correct past the first statement.
     pub fn from_googlesql_root(root: &AstNode, sql: &str) -> Self {
-        let line_starts = line_starts(sql);
+        let index = LineIndex::new(sql);
         let mut nodes: Vec<NodeData> = Vec::new();
-        let root = build_googlesql(root, None, &line_starts, &mut nodes);
+        let root = build_googlesql(root, None, &index, &mut nodes);
         Self { nodes, root }
     }
 
@@ -110,31 +111,57 @@ impl Ast {
     }
 }
 
-/// Byte offset of the start of each line in `sql` (line 0 starts at 0). Used to
-/// turn a byte offset into a 0-based (row, column) without rescanning the whole
-/// source per node.
-fn line_starts(sql: &str) -> Vec<usize> {
-    let mut starts = vec![0usize];
-    for (i, byte) in sql.bytes().enumerate() {
-        if byte == b'\n' {
-            starts.push(i.saturating_add(1));
-        }
-    }
-    starts
+/// Line-start table over `sql`, used to turn a byte offset into a 0-based
+/// (row, column) without rescanning the whole source per node.
+struct LineIndex<'a> {
+    sql: &'a str,
+    /// Byte offset of the start of each line (line 0 starts at 0).
+    starts: Vec<usize>,
+    /// When every byte is ASCII, char column equals byte column, which lets
+    /// `point_at` skip rescanning the line (long minified lines stay O(log n)).
+    ascii: bool,
 }
 
-/// The 0-based (row, column) of `byte`, where `column` is a byte offset within
-/// the line. `starts` must be the ascending line-start table from
-/// [`line_starts`].
-fn point_at(starts: &[usize], byte: usize) -> Point {
-    let row = match starts.binary_search(&byte) {
-        // `byte` is exactly a line start: column 0 of that line.
-        Ok(i) => i,
-        // Otherwise it falls inside the preceding line.
-        Err(i) => i.saturating_sub(1),
-    };
-    let column = byte.saturating_sub(starts.get(row).copied().unwrap_or(0));
-    Point { row, column }
+impl<'a> LineIndex<'a> {
+    fn new(sql: &'a str) -> Self {
+        let mut starts = vec![0usize];
+        for (i, byte) in sql.bytes().enumerate() {
+            if byte == b'\n' {
+                starts.push(i.saturating_add(1));
+            }
+        }
+        Self {
+            sql,
+            starts,
+            ascii: sql.is_ascii(),
+        }
+    }
+
+    /// The 0-based (row, column) of `byte`, where `column` is the number of
+    /// chars (Unicode scalar values) between the line start and `byte`.
+    ///
+    /// A `byte` inside a multibyte char maps to the column of that char, and a
+    /// `byte` past the end is clamped to the end of `sql`; neither panics.
+    fn point_at(&self, byte: usize) -> Point {
+        // Snapping back to a char boundary (and to `len`) makes the slice below
+        // valid and maps a mid-char `byte` to the char it falls inside.
+        let byte = self.sql.floor_char_boundary(byte);
+        let row = match self.starts.binary_search(&byte) {
+            // `byte` is exactly a line start: column 0 of that line.
+            Ok(i) => i,
+            // Otherwise it falls inside the preceding line.
+            Err(i) => i.saturating_sub(1),
+        };
+        let line_start = self.starts.get(row).copied().unwrap_or(0);
+        let column = if self.ascii {
+            byte.saturating_sub(line_start)
+        } else {
+            self.sql
+                .get(line_start..byte)
+                .map_or(0, |line| line.chars().count())
+        };
+        Point { row, column }
+    }
 }
 
 /// The span covering the child ranges that carry a real location, or `None` if
@@ -170,7 +197,7 @@ fn derive_span<'a>(children: impl Iterator<Item = &'a Range<usize>>) -> Option<R
 fn build_googlesql(
     node: &AstNode,
     parent: Option<usize>,
-    starts: &[usize],
+    index: &LineIndex<'_>,
     nodes: &mut Vec<NodeData>,
 ) -> usize {
     let idx = nodes.len();
@@ -179,7 +206,7 @@ fn build_googlesql(
     nodes.push(NodeData {
         kind: node.kind().to_string(),
         named: true,
-        start: point_at(starts, range.start),
+        start: index.point_at(range.start),
         byte_range: range,
         parent,
         children: Vec::new(),
@@ -188,7 +215,7 @@ fn build_googlesql(
     let children: Vec<usize> = node
         .children()
         .iter()
-        .map(|child| build_googlesql(child, Some(idx), starts, nodes))
+        .map(|child| build_googlesql(child, Some(idx), index, nodes))
         .collect();
 
     // A rangeless node (the top-level statement/query/select) spans its located
@@ -206,7 +233,7 @@ fn build_googlesql(
     if let Some(data) = nodes.get_mut(idx) {
         data.children = children;
         if let Some(span) = derived {
-            data.start = point_at(starts, span.start);
+            data.start = index.point_at(span.start);
             data.byte_range = span;
         }
     }
@@ -413,6 +440,44 @@ mod tests {
         assert_eq!(col1.start_position(), Point { row: 0, column: 7 });
         assert_eq!(col1.start_byte(), 7);
         assert_eq!(col1.end_byte(), 11);
+    }
+
+    /// 0-based (row, column) of the first `ASTPathExpression` whose text is `name`.
+    fn position_of(sql: &str, name: &str) -> Point {
+        parse_sql(sql)
+            .pre_order()
+            .into_iter()
+            .find(|n| n.kind() == "ASTPathExpression" && n.text(sql) == Some(name))
+            .unwrap()
+            .start_position()
+    }
+
+    #[test]
+    fn column_counts_chars_not_bytes_after_japanese_text() {
+        // "日本語" is 9 bytes but 3 chars, so `x` sits at char column 14, not 20.
+        let point = position_of("SELECT '日本語', x FROM t", "x");
+        assert_eq!(point, Point { row: 0, column: 14 });
+    }
+
+    #[test]
+    fn column_counts_a_four_byte_emoji_as_one_char() {
+        let point = position_of("SELECT '😀', x FROM t", "x");
+        assert_eq!(point, Point { row: 0, column: 12 });
+    }
+
+    #[test]
+    fn column_is_per_line_when_only_the_second_line_is_non_ascii() {
+        let point = position_of("SELECT 1,\n  '日本', x FROM t", "x");
+        assert_eq!(point, Point { row: 1, column: 8 });
+    }
+
+    #[test]
+    fn point_at_never_panics_on_non_boundary_or_out_of_range_bytes() {
+        let sql = "a日b";
+        let index = LineIndex::new(sql);
+        // Byte 2 is inside the 3-byte "日"; byte 99 is past the end.
+        assert_eq!(index.point_at(2), Point { row: 0, column: 1 });
+        assert_eq!(index.point_at(99), Point { row: 0, column: 3 });
     }
 
     #[test]
