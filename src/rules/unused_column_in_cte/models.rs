@@ -56,7 +56,14 @@ impl PartialOrd for ColumnInfo {
 
 impl Ord for ColumnInfo {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.row.cmp(&other.row).then(self.col.cmp(&other.col))
+        // Tie-break on every field `PartialEq` compares so the order stays consistent
+        // with `Eq` and doesn't depend on HashMap iteration order.
+        self.row
+            .cmp(&other.row)
+            .then_with(|| self.col.cmp(&other.col))
+            .then_with(|| self.table_name.cmp(&other.table_name))
+            .then_with(|| self.column_name.cmp(&other.column_name))
+            .then_with(|| self.original_column_name.cmp(&other.original_column_name))
     }
 }
 
@@ -90,6 +97,48 @@ mod tests {
 
         assert!(col1 < col2);
         assert!(col2 < col3);
+    }
+
+    #[test]
+    fn test_column_info_ordering_is_independent_of_input_order_on_position_ties() {
+        // Same (row, col) happens for nodes without a byte range or `*` expansion.
+        let cols = [
+            ColumnInfo::new(Some("b".to_string()), "x".to_string(), None, 0, 0),
+            ColumnInfo::new(Some("a".to_string()), "y".to_string(), None, 0, 0),
+            ColumnInfo::new(Some("a".to_string()), "x".to_string(), None, 0, 0),
+            ColumnInfo::new(None, "z".to_string(), None, 0, 0),
+            ColumnInfo::new(
+                Some("a".to_string()),
+                "x".to_string(),
+                Some("orig".to_string()),
+                0,
+                0,
+            ),
+        ];
+
+        let mut expected = cols.to_vec();
+        expected.sort();
+
+        let n = cols.len();
+        for rot in 0..n {
+            for reversed in [false, true] {
+                let mut input: Vec<_> = cols.iter().cloned().cycle().skip(rot).take(n).collect();
+                if reversed {
+                    input.reverse();
+                }
+                input.sort();
+                assert_eq!(input, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn test_column_info_ordering_consistent_with_eq() {
+        let a = ColumnInfo::new(Some("t".to_string()), "c".to_string(), None, 0, 0);
+        let b = ColumnInfo::new(Some("t".to_string()), "d".to_string(), None, 0, 0);
+
+        assert_ne!(a.cmp(&b), std::cmp::Ordering::Equal);
+        assert_eq!(a.cmp(&a.clone()), std::cmp::Ordering::Equal);
     }
 
     #[test]

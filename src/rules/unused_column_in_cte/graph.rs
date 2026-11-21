@@ -201,4 +201,34 @@ mod tests {
         let unused = graph.collect_unused_columns();
         assert_eq!(unused.len(), 0);
     }
+
+    #[test]
+    fn test_collect_unused_columns_order_is_independent_of_cte_insertion_order() {
+        let cte_names = ["cte_a", "cte_b", "cte_c", "cte_d"];
+        let build = |names: &[&str]| {
+            let mut graph = DependencyGraph::new();
+            for name in names {
+                // Same (row, col) in every CTE, as with a `*` expansion.
+                let cols = [ColumnInfo::new(
+                    Some((*name).to_string()),
+                    "col".to_string(),
+                    None,
+                    0,
+                    0,
+                )];
+                graph.add_cte(name, &cols);
+            }
+            graph.collect_unused_columns()
+        };
+
+        let expected = build(&cte_names);
+        let mut reversed = cte_names;
+        reversed.reverse();
+
+        // Fresh HashMaps get different random seeds, so repeat to catch order leaks.
+        for _ in 0..20 {
+            assert_eq!(build(&cte_names), expected);
+            assert_eq!(build(&reversed), expected);
+        }
+    }
 }
