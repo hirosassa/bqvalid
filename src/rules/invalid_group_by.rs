@@ -73,15 +73,32 @@ impl Rule for InvalidGroupBy {
     }
 }
 
+/// What the GROUP BY clause of a SELECT groups by.
+struct GroupBy {
+    columns: HashSet<String>,
+    /// 1-based SELECT list positions referenced as `GROUP BY 1`.
+    ordinals: HashSet<usize>,
+    /// `GROUP BY ALL` groups by every non-aggregate SELECT item.
+    all: bool,
+}
+
 fn check_select(node: &NodeRef<'_>, sql: &str) -> Option<Vec<Diagnostic>> {
-    let group_by_columns = extract_group_by_columns(node, sql)?;
+    let group_by = extract_group_by(node, sql)?;
+    if group_by.all {
+        return None;
+    }
 
     let select_list = find_child_of_kind(node, "ASTSelectList")?;
 
     let mut diagnostics = Vec::new();
-    for child in select_list.named_children() {
+    for (index, child) in select_list.named_children().into_iter().enumerate() {
+        // An ordinal's position counts every select item, so it is checked against
+        // the 1-based index before filtering by kind.
+        if group_by.ordinals.contains(&index.saturating_add(1)) {
+            continue;
+        }
         if child.kind() == "ASTSelectColumn"
-            && let Some(diag) = check_select_expression(&child, sql, &group_by_columns)
+            && let Some(diag) = check_select_expression(&child, sql, &group_by.columns)
         {
             diagnostics.push(diag);
         }
@@ -94,18 +111,39 @@ fn check_select(node: &NodeRef<'_>, sql: &str) -> Option<Vec<Diagnostic>> {
     }
 }
 
-fn extract_group_by_columns(select_node: &NodeRef<'_>, sql: &str) -> Option<HashSet<String>> {
+fn extract_group_by(select_node: &NodeRef<'_>, sql: &str) -> Option<GroupBy> {
     let group_by_node = find_child_of_kind(select_node, "ASTGroupBy")?;
-    let mut columns = HashSet::new();
+    let mut group_by = GroupBy {
+        columns: HashSet::new(),
+        ordinals: HashSet::new(),
+        all: false,
+    };
 
     for node in group_by_node.pre_order() {
-        if node.kind() == "ASTIdentifier" {
-            let text = get_node_text(&node, sql);
-            columns.insert(text.to_string());
+        match node.kind() {
+            "ASTIdentifier" => {
+                group_by
+                    .columns
+                    .insert(get_node_text(&node, sql).to_string());
+            }
+            "ASTGroupByAll" => group_by.all = true,
+            "ASTIntLiteral" if is_grouping_item_operand(&node) => {
+                if let Ok(ordinal) = get_node_text(&node, sql).parse::<usize>() {
+                    group_by.ordinals.insert(ordinal);
+                }
+            }
+            _ => {}
         }
     }
 
-    Some(columns)
+    Some(group_by)
+}
+
+/// True for a bare literal directly under a grouping item (`GROUP BY 1`), as
+/// opposed to one nested in an expression (`GROUP BY a + 1`).
+fn is_grouping_item_operand(node: &NodeRef<'_>) -> bool {
+    node.parent()
+        .is_some_and(|parent| parent.kind() == "ASTGroupingItem")
 }
 
 fn check_select_expression(
@@ -231,6 +269,8 @@ GROUP BY t1.col1, col2;
 ",
         1
     )]
+    // Only the ordinal-referenced item is grouped; the other column is not
+    #[case("SELECT a, b, COUNT(*) FROM t GROUP BY 1;", 1)]
     fn test_invalid_group_by(#[case] sql: &str, #[case] expected_count: usize) {
         let diagnostics = run_rule(&InvalidGroupBy, sql);
         assert_eq!(
@@ -332,6 +372,14 @@ JOIN orders t2 ON t1.id = t2.user_id
 GROUP BY t1.user_id, t2.category;
 "
     )]
+    // GROUP BY ordinal refers to the SELECT item; that item counts as grouped
+    #[case("SELECT a, COUNT(*) FROM t GROUP BY 1;")]
+    #[case("SELECT a, b, COUNT(*) FROM t GROUP BY 1, 2;")]
+    #[case("SELECT a, b, COUNT(*) FROM t GROUP BY 2, 1;")]
+    #[case("SELECT a + 1 AS x, COUNT(*) FROM t GROUP BY 1;")]
+    #[case("SELECT t.a, COUNT(*) FROM t GROUP BY 1;")]
+    // GROUP BY ALL groups by every non-aggregate SELECT item
+    #[case("SELECT a, b, COUNT(*) FROM t GROUP BY ALL;")]
     fn test_valid_group_by(#[case] sql: &str) {
         // Some cases bundle several independent valid statements; googlesql parses
         // one statement at a time, so run each `;`-separated statement on its own.
