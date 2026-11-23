@@ -83,26 +83,15 @@ fn comparison_operands<'a>(node: &NodeRef<'a>) -> Vec<NodeRef<'a>> {
 /// is a date/time transform wrapped around a column reference, else `None`.
 fn date_time_transform_on_column<'a>(operand: &NodeRef<'a>, sql: &str) -> Option<NodeRef<'a>> {
     match operand.kind() {
-        // A function call's first named child is the function name (an
-        // `ASTPathExpression`), so skip it when looking for a wrapped column.
-        "ASTFunctionCall"
-            if is_date_time_function(operand, sql) && wraps_column(operand, sql, true) =>
-        {
+        "ASTFunctionCall" if is_date_time_function(operand, sql) && wraps_column(operand, sql) => {
             Some(*operand)
         }
-        // A cast's operand is a child too, so keep it; the target type is skipped
-        // inside `wraps_column`.
-        "ASTCastExpression"
-            if casts_to_date_time(operand, sql) && wraps_column(operand, sql, false) =>
-        {
+        "ASTCastExpression" if casts_to_date_time(operand, sql) && wraps_column(operand, sql) => {
             Some(*operand)
         }
-        // `EXTRACT(part FROM col)` is a dedicated node whose first named child is
-        // the date part (e.g. `year`), playing the same role as a function name.
-        // Skipping it keeps the part from being read as a column, so only a real
-        // operand column trips the rule. EXTRACT is inherently a date/time
-        // transform, so no function-name allowlist check is needed.
-        "ASTExtractExpression" if wraps_column(operand, sql, true) => Some(*operand),
+        // EXTRACT is inherently a date/time transform, so no function-name
+        // allowlist check is needed.
+        "ASTExtractExpression" if wraps_column(operand, sql) => Some(*operand),
         _ => None,
     }
 }
@@ -131,28 +120,64 @@ fn casts_to_date_time(cast: &NodeRef<'_>, sql: &str) -> bool {
 }
 
 /// True when the transform is applied to a column reference rather than only
-/// literals, e.g. `date(created_at)` (flagged) vs `date('2024-01-01')` (not).
+/// literals or other column-free calls, e.g. `date(created_at)` (flagged) vs
+/// `date('2024-01-01')` and `timestamp_trunc(current_timestamp(), day)` (not).
 ///
-/// A column reference is an `ASTIdentifier` that is neither the transform's own
-/// name nor part of a type. On googlesql both the function name and the cast
-/// target type are themselves `ASTIdentifier`s, so their subtrees are excluded
-/// to avoid mistaking them for a column.
-fn wraps_column(operand: &NodeRef<'_>, sql: &str, skip_first_named_child: bool) -> bool {
+/// A column reference is an `ASTIdentifier` that is not one of the non-column
+/// identifiers googlesql also models as identifiers, collected by
+/// [`non_column_subtrees`]. Searching the whole subtree (not just the top-level
+/// call) means a column nested under another call is still found.
+fn wraps_column(operand: &NodeRef<'_>, sql: &str) -> bool {
+    let nodes = operand.pre_order();
     let mut skip: Vec<usize> = Vec::new();
-    if skip_first_named_child && let Some(name) = operand.named_child(0) {
-        skip.extend(name.pre_order().into_iter().map(|n| n.id()));
+    for node in &nodes {
+        skip.extend(non_column_subtrees(node, sql));
     }
-    for node in operand.pre_order() {
-        // A type node (`cast(col AS date)`) wraps its own identifier on
-        // googlesql; exclude the whole type subtree so it is not read as a column.
-        if node.kind() == "ASTSimpleType" {
-            skip.extend(node.pre_order().into_iter().map(|n| n.id()));
-        }
-    }
-    operand.pre_order().into_iter().any(|node| {
+    nodes.iter().any(|node| {
         node.kind() == "ASTIdentifier"
             && !skip.contains(&node.id())
-            && !get_node_text(&node, sql).is_empty()
+            && !get_node_text(node, sql).is_empty()
+    })
+}
+
+/// Ids of the identifiers under `node` that are not column references:
+///
+/// - a function call's name (`current_timestamp` in `current_timestamp()`);
+/// - the date part argument of a `*_trunc` call (`day` in `timestamp_trunc(x, day)`);
+/// - the date part of `EXTRACT(part FROM x)`;
+/// - the unit of an `INTERVAL n unit` expression;
+/// - a type name (`cast(col AS date)` wraps its own identifier on googlesql).
+fn non_column_subtrees(node: &NodeRef<'_>, sql: &str) -> Vec<usize> {
+    let excluded: Vec<NodeRef<'_>> = match node.kind() {
+        "ASTFunctionCall" => {
+            let mut parts: Vec<NodeRef<'_>> = node.named_child(0).into_iter().collect();
+            if is_trunc_function(node, sql) {
+                parts.extend(node.named_child(2));
+            }
+            parts
+        }
+        "ASTExtractExpression" => node.named_child(0).into_iter().collect(),
+        "ASTIntervalExpr" => node
+            .named_children()
+            .into_iter()
+            .filter(|child| child.kind() == "ASTIdentifier")
+            .collect(),
+        "ASTSimpleType" => vec![*node],
+        _ => Vec::new(),
+    };
+    excluded
+        .iter()
+        .flat_map(|part| part.pre_order().into_iter().map(|n| n.id()))
+        .collect()
+}
+
+/// True when the function-call node is a `*_trunc` call, whose third named child
+/// (after the name and the value) is a date part keyword rather than a column.
+fn is_trunc_function(func: &NodeRef<'_>, sql: &str) -> bool {
+    func.named_child(0).is_some_and(|name| {
+        get_node_text(&name, sql)
+            .to_ascii_lowercase()
+            .ends_with("_trunc")
     })
 }
 
@@ -330,6 +355,44 @@ mod tests {
             diagnostics.is_empty(),
             "date(literal) does not defeat pruning of a bare column"
         );
+    }
+
+    #[test]
+    fn does_not_flag_constant_function_call_on_comparison_rhs() {
+        // `TIMESTAMP_TRUNC(CURRENT_TIMESTAMP(), DAY)` takes no column: the inner
+        // function name and the `DAY` date part must not be read as columns. This
+        // is the recommended pruning-friendly pattern.
+        let sql = "SELECT x FROM t WHERE ts2 > TIMESTAMP_TRUNC(CURRENT_TIMESTAMP(), DAY)";
+        let diagnostics = run_rule(&ApplyFunctionToPartitionColumn, sql);
+        assert!(
+            diagnostics.is_empty(),
+            "a column-free date/time call must not be flagged ({} found)",
+            diagnostics.len()
+        );
+    }
+
+    #[test]
+    fn does_not_flag_other_constant_date_time_calls() {
+        for sql in [
+            "SELECT x FROM t WHERE d >= DATE_TRUNC(CURRENT_DATE(), MONTH)",
+            "SELECT x FROM t WHERE ts >= TIMESTAMP(DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY))",
+            "SELECT x FROM t WHERE d = DATE(CURRENT_TIMESTAMP(), 'Asia/Tokyo')",
+        ] {
+            let diagnostics = run_rule(&ApplyFunctionToPartitionColumn, sql);
+            assert!(
+                diagnostics.is_empty(),
+                "constant call must not be flagged: {sql} ({} found)",
+                diagnostics.len()
+            );
+        }
+    }
+
+    #[test]
+    fn flags_trunc_with_nested_function_around_column() {
+        // A column nested under another function call still defeats pruning.
+        let sql = "SELECT x FROM t WHERE TIMESTAMP_TRUNC(TIMESTAMP_ADD(ts, INTERVAL 1 HOUR), DAY) = '2024-01-01'";
+        let diagnostics = run_rule(&ApplyFunctionToPartitionColumn, sql);
+        assert_eq!(diagnostics.len(), 1, "nested column must still be flagged");
     }
 
     #[test]
